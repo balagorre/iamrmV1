@@ -10,10 +10,11 @@ def chunk_text(text, chunk_size=8000):
 
 def analyze_text_with_claude3(text_file):
     """
-    Processes extracted text using Claude 3 via AWS Bedrock to generate structured insights.
+    Processes extracted text using Claude 3 via AWS Bedrock to generate structured insights
+    and stores it in a knowledge base for question answering.
     
     :param text_file: Path to the extracted text file.
-    :return: Extracted model details in JSON format.
+    :return: Extracted model details stored as a knowledge base.
     """
     try:
         # Read extracted text
@@ -79,6 +80,8 @@ def analyze_text_with_claude3(text_file):
                - Provide a concise summary of extracted details.
                - Highlight inconsistencies, gaps, or missing details within the document.
             
+            **Important:** Ensure accuracy and completeness when analyzing structured sections. Prioritize factual information from the document, and avoid making assumptions beyond the given text.
+            
             **Document Content:**
             {chunk}
             """
@@ -102,19 +105,19 @@ def analyze_text_with_claude3(text_file):
                     
                     response_body = json.loads(response['body'].read().decode('utf-8'))
                     insights = response_body.get('completion', 'No response received')
-                    extracted_insights.append(insights)
+                    extracted_insights.append({"chunk": i+1, "insights": insights})
                     break  # Exit retry loop if successful
                 except Exception as e:
                     print(f"Attempt {attempt+1} failed: {e}")
                     time.sleep(2)  # Wait before retrying
             
-        # Save results as JSON
-        output_file = text_file.replace(".txt", "_analysis.json")
-        with open(output_file, "w", encoding="utf-8") as f:
+        # Save results as a structured knowledge base (JSON)
+        kb_file = text_file.replace(".txt", "_knowledge_base.json")
+        with open(kb_file, "w", encoding="utf-8") as f:
             json.dump(extracted_insights, f, indent=4)
         
-        print(f"Analysis saved to {output_file}")
-        return extracted_insights
+        print(f"Knowledge base saved to {kb_file}")
+        return kb_file
     
     except Exception as e:
         print(f"Error analyzing text: {e}")

@@ -1,15 +1,15 @@
 Step 1 (Preprocessing - Modified):
 
+
+
 import json
 import os
 import re
-#from PyPDF2 import PdfReader  # Remove PyPDF2
-from pdfminer.high_level import extract_pages
-from pdfminer.layout import LTTextContainer, LTChar
+from PyPDF2 import PdfReader
 
-def preprocess_pdf(file_path, chunk_size=10000): # Added chunk_size
+def preprocess_pdf(file_path, chunk_size=10000):
     """
-    Preprocesses a PDF file, extracting text and dividing it into chunks.
+    Preprocesses a PDF file using PyPDF2, extracting text and dividing it into chunks.
 
     Args:
         file_path (str): The local path to the PDF file.
@@ -20,32 +20,32 @@ def preprocess_pdf(file_path, chunk_size=10000): # Added chunk_size
               Returns None if an error occurs.
     """
     try:
-        all_chunks = []
-        current_chunk = ""
+        with open(file_path, 'rb') as f:
+            reader = PdfReader(f)
+            all_chunks = []
+            current_chunk = ""
 
-        for page_layout in extract_pages(file_path):
-            for element in page_layout:
-                if isinstance(element, LTTextContainer):
-                    text = element.get_text()
-                    text = re.sub(r'\s+', ' ', text).strip() # Clean text
+            for page in reader.pages:
+                text = page.extract_text()
+                text = re.sub(r'\s+', ' ', text).strip()  # Clean text
 
-                    current_chunk += text + " " # Add to current chunk
+                current_chunk += text + " "
 
-                    while len(current_chunk) >= chunk_size:
-                        # Find a good place to split (e.g., sentence boundary)
-                        split_index = current_chunk.rfind('. ', 0, chunk_size)
-                        if split_index == -1: # No period found
-                          split_index = chunk_size
+                while len(current_chunk) >= chunk_size:
+                    # Find a good place to split (e.g., sentence boundary)
+                    split_index = current_chunk.rfind('. ', 0, chunk_size)
+                    if split_index == -1:  # No period found
+                        split_index = chunk_size
 
-                        chunk_text = current_chunk[:split_index].strip()
-                        all_chunks.append({"text": chunk_text})
-                        current_chunk = current_chunk[split_index:].strip() # Remaining text
+                    chunk_text = current_chunk[:split_index].strip()
+                    all_chunks.append({"text": chunk_text})
+                    current_chunk = current_chunk[split_index:].strip()
 
-        # Add any remaining text
-        if current_chunk:
-            all_chunks.append({"text": current_chunk.strip()})
+            # Add any remaining text
+            if current_chunk:
+                all_chunks.append({"text": current_chunk.strip()})
 
-        return all_chunks
+            return all_chunks
 
     except Exception as e:
         print(f"Error processing {file_path}: {e}")
@@ -69,16 +69,17 @@ def process_local_pdfs(input_dir, output_dir):
                         json.dump(chunk, outfile, indent=4)
                     print(f"Processed chunk {i} of {filename}, saved to {output_file_path}")
 
-# --- Example Usage (remains largely the same) ---
+# --- Example Usage ---
 input_directory = 'input_pdfs'
 output_directory = 'preprocessed_pdfs'
 
 if not os.path.exists(input_directory):
     os.makedirs(input_directory)
 
-# (Dummy PDF creation code remains the same - or use your real PDFs)
-# ...
+# (Dummy PDF creation code - or use your real PDFs)
+# ... (You can use the dummy PDF creation code from the previous examples)
 
+process_local_pdfs(input_directory, output_directory)
 process_local_pdfs(input_directory, output_directory)
 
 #Step 2 (Information Extraction - Modified):

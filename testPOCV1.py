@@ -8,17 +8,7 @@ import re
 from PyPDF2 import PdfReader
 
 def preprocess_pdf(file_path, chunk_size=10000):
-    """
-    Preprocesses a PDF file using PyPDF2, extracting text and dividing it into chunks.
-
-    Args:
-        file_path (str): The local path to the PDF file.
-        chunk_size (int):  Approximate size of text chunks (in characters).
-
-    Returns:
-        list: A list of dictionaries, each containing a chunk of text.
-              Returns None if an error occurs.
-    """
+    # (This function remains the same as the PyPDF2 version with chunking)
     try:
         with open(file_path, 'rb') as f:
             reader = PdfReader(f)
@@ -50,7 +40,6 @@ def preprocess_pdf(file_path, chunk_size=10000):
     except Exception as e:
         print(f"Error processing {file_path}: {e}")
         return None
-
 def process_local_pdfs(input_dir, output_dir):
     """Processes PDFs, creates chunked JSON files."""
     if not os.path.exists(output_dir):
@@ -62,9 +51,12 @@ def process_local_pdfs(input_dir, output_dir):
             chunks = preprocess_pdf(file_path)
 
             if chunks:
-                # Save each chunk as a separate JSON file
+                # --- MODIFICATION HERE ---
+                #  Create a standardized base name for output files
+                base_name = "whitepaper"  #  Or get it from a mapping (see below)
+
                 for i, chunk in enumerate(chunks):
-                    output_file_path = os.path.join(output_dir, f"{filename.replace('.pdf', '')}_chunk_{i}.json")
+                    output_file_path = os.path.join(output_dir, f"{base_name}_chunk_{i}.json")
                     with open(output_file_path, 'w') as outfile:
                         json.dump(chunk, outfile, indent=4)
                     print(f"Processed chunk {i} of {filename}, saved to {output_file_path}")
@@ -73,14 +65,151 @@ def process_local_pdfs(input_dir, output_dir):
 input_directory = 'input_pdfs'
 output_directory = 'preprocessed_pdfs'
 
+# --- (Optional: Filename to Artifact Type Mapping) ---
+filename_to_artifact_type = {
+    "System-Level White Paper.pdf": "whitepaper",
+    "System Test Plan.pdf": "testplan", # Example
+    "Test Results Summary.pdf" : "testresults", # Example
+    "Reconciliation Report.pdf": "reconciliationreport" # Example
+    # Add other mappings as needed
+}
+
 if not os.path.exists(input_directory):
     os.makedirs(input_directory)
-
-# (Dummy PDF creation code - or use your real PDFs)
-# ... (You can use the dummy PDF creation code from the previous examples)
+# ... (Dummy PDF creation code - or use your real PDFs)
 
 process_local_pdfs(input_directory, output_directory)
-process_local_pdfs(input_directory, output_directory)
+
+
+
+Modified Ste2:
+
+
+import json
+import boto3
+import os
+import re
+
+# --- Configuration ---
+PREPROCESSED_DIR = 'preprocessed_pdfs'
+EXTRACTED_DIR = 'extracted_data'
+
+# --- AWS Bedrock Client ---
+bedrock = boto3.client('bedrock-runtime')
+
+# --- Prompt Templates (Remain the same) ---
+# ... (All your prompt template functions: get_whitepaper_prompt_template, etc.)
+
+# --- Few-Shot Examples (Remain the same) ---
+# ... (All your few-shot example functions)
+
+def process_file_chunk(file_path, artifact_type):
+     # (This function remains the same)
+    try:
+        with open(file_path, 'r') as f:
+            preprocessed_data = json.load(f)
+
+        # Simplified prompts, focusing on presence/absence in chunk
+        if artifact_type == 'whitepaper':
+            prompt_template = get_whitepaper_prompt_template()
+            few_shot_example = get_whitepaper_few_shot_example()
+        # ... (add elif blocks for other artifact types, with their own prompts)
+        elif artifact_type == 'testplan':
+            prompt_template = get_testplan_prompt_template()
+            few_shot_example = get_testplan_few_shot_example()
+        elif artifact_type == 'testresults':
+            prompt_template = get_testresults_prompt_template()
+            few_shot_example = get_testresults_few_shot_example()
+        elif artifact_type == 'reconciliationreport':
+            prompt_template = get_reconciliation_report_prompt_template()
+            few_shot_example = get_reconciliation_report_few_shot_example()
+        else:
+            raise ValueError(f"Invalid artifact type: {artifact_type}")
+
+
+        prompt = prompt_template.format(preprocessed_text=preprocessed_data['text'], few_shot_example=few_shot_example)
+
+        response = bedrock.invoke_model(
+            body=json.dumps({
+                "prompt": f"\n\nHuman:{prompt}\n\nAssistant:",
+                "max_tokens_to_sample": 4096,
+                "temperature": 0.1,
+                "top_p": 0.9,
+            }),
+            modelId="anthropic.claude-v3-sonnet",
+            contentType="application/json",
+            accept="application/json"
+        )
+
+        response_body = json.loads(response.get('body').read())
+        extracted_data_text = response_body.get('completion')
+        extracted_data = json.loads(extracted_data_text)
+        return extracted_data
+
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
+        return None
+def extract_data_from_preprocessed_files(input_dir, output_dir):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    for filename in os.listdir(input_dir):
+        if filename.endswith('.json'):
+            file_path = os.path.join(input_dir, filename)
+            # --- MODIFICATION HERE ---
+            #  Simpler artifact type determination (since Step 1 now handles naming)
+            match = re.match(r'(.+)_chunk_(\d+)\.json', filename)
+            if not match:
+                print(f"Skipping file with unexpected name format: {filename}")
+                continue
+
+            artifact_base_name = match.group(1)
+            # chunk_number = int(match.group(2)) # No longer needed here
+            artifact_type = artifact_base_name.lower()
+
+            extracted_data = process_file_chunk(file_path, artifact_type)
+
+
+            if extracted_data:
+                output_file_path = os.path.join(output_dir, filename)  # Same name
+                with open(output_file_path, 'w') as outfile:
+                    json.dump(extracted_data, outfile, indent=4)
+                print(f"Extracted data from {filename}, saved to {output_file_path}")
+
+    # --- Post-Processing (Combine Chunk Results) ---
+    # After processing all chunks, combine the results for each artifact
+    for artifact_base_name in set([f.split('_chunk_')[0] for f in os.listdir(output_dir) if f.endswith('.json')]):
+      combine_chunks(output_dir, artifact_base_name)
+
+def combine_chunks(extracted_dir, artifact_base_name):
+    # (This function remains the same)
+    """Combines the extracted data from multiple chunks into a single JSON file."""
+    combined_data = {}
+    chunk_files = sorted([f for f in os.listdir(extracted_dir) if f.startswith(artifact_base_name) and f.endswith('.json')],
+                         key=lambda x: int(x.split('_chunk_')[1].split('.json')[0])) # Sort by chunk number
+
+    for chunk_file in chunk_files:
+        file_path = os.path.join(extracted_dir, chunk_file)
+        with open(file_path, 'r') as f:
+            chunk_data = json.load(f)
+
+            # Merge the chunk data into the combined data
+            for key, value in chunk_data.items():
+                if key not in combined_data:
+                    combined_data[key] = value
+                elif isinstance(value, list):
+                     #Simple deduplication.
+                    combined_data[key].extend(item for item in value if item not in combined_data[key])
+                # Add other merging logic as needed (e.g., for strings, numbers)
+    # Save the combined data
+    output_file_path = os.path.join(extracted_dir, f"{artifact_base_name}.json")
+    with open(output_file_path, 'w') as outfile:
+        json.dump(combined_data, outfile, indent=4)
+    print(f"Combined data for {artifact_base_name} saved to {output_file_path}")
+
+# --- Main Execution ---
+extract_data_from_preprocessed_files(PREPROCESSED_DIR, EXTRACTED_DIR)
+
 
 #Step 2 (Information Extraction - Modified):
 

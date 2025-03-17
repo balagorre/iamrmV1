@@ -1,3 +1,73 @@
+def process_file_chunk(file_path, artifact_type):
+    """Processes a single chunk of a preprocessed file."""
+    try:
+        with open(file_path, 'r') as f:
+            preprocessed_data = json.load(f)
+
+        extracted_data_text = None  # Initialize here
+
+        if artifact_type == 'whitepaper':
+            prompt_template = get_whitepaper_prompt_template()
+            few_shot_example = get_whitepaper_few_shot_example()
+            schema = get_whitepaper_output_schema()
+        elif artifact_type == 'testplan':
+            prompt_template = get_testplan_prompt_template()
+            few_shot_example = get_testplan_few_shot_example()
+            schema = get_testplan_output_schema()
+        elif artifact_type == 'testresults':
+            prompt_template = get_testresults_prompt_template()
+            few_shot_example = get_testresults_few_shot_example()
+            schema = get_testresults_output_schema()
+        elif artifact_type == 'reconciliationreport':
+            prompt_template = get_reconciliation_report_prompt_template()
+            few_shot_example = get_reconciliation_report_few_shot_example()
+            schema = get_reconciliation_report_output_schema()
+        else:
+            raise ValueError(f"Invalid artifact type: {artifact_type}")
+
+        prompt = prompt_template.format(preprocessed_text=preprocessed_data['text'], few_shot_example=few_shot_example)
+
+        response = bedrock.invoke_model(
+            body=json.dumps({
+                "prompt": f"\n\nHuman:{prompt}\n\nAssistant:",
+                "max_tokens_to_sample": 4096,
+                "temperature": 0.1,
+                "top_p": 0.9,
+            }),
+            modelId="anthropic.claude-v3-sonnet",
+            contentType="application/json",
+            accept="application/json"
+        )
+
+        response_body = json.loads(response.get('body').read())
+        extracted_data_text = response_body.get('completion')  # Now assigned within the conditional
+
+        if extracted_data_text is None:
+            print("Error: Claude 3 returned an empty completion.")
+            return None
+
+        try:
+            extracted_data = json.loads(extracted_data_text)
+        except json.JSONDecodeError as e:
+            print(f"Error: JSONDecodeError: {e}")
+            print(f"Invalid JSON: {extracted_data_text}")
+            return None
+
+        try:
+            validate(instance=extracted_data, schema=schema)
+        except ValidationError as e:
+            print(f"Error: JSON Schema Validation Failed: {e}")
+            print(f"For data: {extracted_data}")  # Print the data that failed validation
+            return None
+
+        return extracted_data
+
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
+        return None
+
+
+
 ```python
 import json
 import boto3

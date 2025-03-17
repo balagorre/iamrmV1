@@ -1,3 +1,9 @@
+# Inside Step 2's code:
+
+from jsonschema import validate
+from jsonschema.exceptions import ValidationError  # <--- Add this import
+
+
 def process_file_chunk(file_path, artifact_type):
     """Processes a single chunk of a preprocessed file."""
     try:

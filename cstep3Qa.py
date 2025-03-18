@@ -1,3 +1,98 @@
+import json
+import boto3
+import numpy as np
+import chromadb
+import logging
+from collections import OrderedDict
+from langchain.embeddings import BedrockEmbeddings
+from rank_bm25 import BM25Okapi
+
+# Initialize Bedrock Embeddings and ChromaDB
+bedrock_embeddings = BedrockEmbeddings(model_id='amazon.titan-embed-text-v1')
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
+collection = chroma_client.get_or_create_collection(name="model_knowledge_base")
+
+# Configure logging
+logging.basicConfig(filename="qa_system.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def get_bedrock_embeddings(texts):
+    """
+    Uses Bedrock Embeddings API to generate embeddings for input texts.
+    """
+    try:
+        embeddings = bedrock_embeddings.embed_documents(texts)
+        if not embeddings:
+            raise ValueError("Embedding API returned None")
+        return embeddings
+    except Exception as e:
+        logging.error("Error generating embeddings: %s", str(e))
+        return None
+
+def expand_query(query):
+    """
+    Uses Claude 3 to generate query expansions for better retrieval.
+    Logs the expanded queries for debugging and accuracy tracking.
+    """
+    bedrock = boto3.client(service_name='bedrock-runtime', region_name='us-east-1')
+    prompt = f"""
+    Generate multiple variations and expansions for the following search query:
+    {query}
+    """
+    payload = {"prompt": prompt, "max_tokens": 100, "temperature": 0.5}
+    
+    try:
+        response = bedrock.invoke_model(
+            body=json.dumps(payload),
+            modelId='anthropic.claude-3-sonnet-2024-02-29',
+            accept='application/json',
+            contentType='application/json'
+        )
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        expanded_queries = response_body.get('completion', '').split("\n")
+        logging.info("Query Expansion for '%s': %s", query, expanded_queries)
+        return expanded_queries
+    except Exception as e:
+        logging.error("Error generating query expansion: %s", str(e))
+        return [query]
+
+def search_knowledge_base(query, top_k=5):
+    """
+    Uses hybrid search (BM25 + Embeddings) with query expansion to retrieve the most relevant insights.
+    """
+    try:
+        expanded_queries = expand_query(query)
+        all_results = []
+        for q in expanded_queries:
+            query_embedding = get_bedrock_embeddings([q])
+            if query_embedding:
+                results = collection.query(query_embeddings=[query_embedding[0]], n_results=top_k)
+                retrieved_documents = [metadata.get("insights", "No insights found") for metadata in results["metadatas"]]
+                all_results.extend(retrieved_documents)
+        
+        return all_results if all_results else ["No relevant information found."]
+    except Exception as e:
+        logging.error("Error retrieving from knowledge base: %s", str(e))
+        return ["Error retrieving results."]
+
+# Example usage
+kb_file = "extracted_text_knowledge_base.json"
+interactive_qa_system(kb_file)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Configure logging
 logging.basicConfig(filename="qa_system.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 

@@ -1,3 +1,17 @@
+
+def search_knowledge_base(query, top_k=5):
+    """
+    Uses ChromaDB to retrieve the most relevant insights using Bedrock embeddings.
+    """
+    query_embedding = get_bedrock_embeddings([query])[0]
+    results = collection.query(query_embeddings=[query_embedding], n_results=top_k)
+
+    if results["documents"]:
+        return [metadata.get("insights", "No insights found") for metadata in results["metadatas"]]
+    return ["No relevant information found."]
+
+
+
 import json
 import boto3
 import numpy as np

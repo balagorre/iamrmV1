@@ -68,7 +68,7 @@ def vector_search_retriever(query, top_k=5, score_threshold=0.3):
         # Apply a score threshold to filter out low-relevance chunks
         filtered_results = []
         for idx, metadata in enumerate(results.get('metadatas', [])):
-            score = results.get('distances', [])[idx] if 'distances' in results else 1.0  # ChromaDB uses distance (lower is better)
+            score = results.get('distances', [[1.0]])[0][idx] if 'distances' in results and isinstance(results.get('distances', []), list) and len(results.get('distances', [])) > 0 else 1.0  # ChromaDB uses distance (lower is better)
             if score < score_threshold:
                 filtered_results.append(metadata.get("insights", "No insights found"))
         

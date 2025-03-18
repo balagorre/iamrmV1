@@ -1,4 +1,237 @@
 import boto3
+
+def upload_pdf_to_s3(local_file_path, bucket_name, s3_folder):
+    """
+    Uploads a local PDF file to an S3 bucket under a specified folder.
+    
+    Args:
+        local_file_path (str): Path to the local file on the SageMaker instance.
+        bucket_name (str): Name of the S3 bucket.
+        s3_folder (str): Folder path in the S3 bucket where the file will be uploaded.
+
+    Returns:
+        str: The full S3 key of the uploaded file if successful, None otherwise.
+    """
+    s3 = boto3.client('s3')
+    s3_key = f"{s3_folder}/{local_file_path.split('/')[-1]}"  # Generate S3 key based on folder and filename
+    
+    try:
+        print(f"Uploading {local_file_path} to s3://{bucket_name}/{s3_key}...")
+        s3.upload_file(local_file_path, bucket_name, s3_key)
+        print(f"File uploaded successfully to s3://{bucket_name}/{s3_key}.")
+        return s3_key
+    except Exception as e:
+        print(f"Error uploading file to S3: {str(e)}")
+        return None
+
+# Example usage
+local_file_path = "./mrecon/data/whitepaper.pdf"
+bucket_name = "your-s3-bucket-name"
+s3_folder = "home/genai009"
+
+s3_key = upload_pdf_to_s3(local_file_path, bucket_name, s3_folder)
+if s3_key:
+    print(f"File uploaded successfully. S3 Key: {s3_key}")
+else:
+    print("File upload failed.")
+
+
+
+
+
+def start_textract_job(bucket_name, s3_key):
+    """
+    Starts a Textract job for analyzing a document in S3.
+    
+    Args:
+        bucket_name (str): Name of the S3 bucket.
+        s3_key (str): Key of the file in the S3 bucket.
+
+    Returns:
+        str: The Textract Job ID if successful, None otherwise.
+    """
+    textract = boto3.client('textract')
+    
+    try:
+        print("Starting Textract job...")
+        response = textract.start_document_analysis(
+            DocumentLocation={'S3Object': {'Bucket': bucket_name, 'Name': s3_key}},
+            FeatureTypes=['TABLES', 'FORMS']  # Extract tables and forms
+        )
+        job_id = response['JobId']
+        print(f"Textract Job ID: {job_id}")
+        return job_id
+    except Exception as e:
+        print(f"Error starting Textract job: {str(e)}")
+        return None
+
+# Example usage
+if s3_key:
+    textract_job_id = start_textract_job(bucket_name, s3_key)
+
+
+
+
+
+import time
+
+def wait_for_textract_job(job_id):
+    """
+    Waits for a Textract job to complete and returns its status.
+    
+    Args:
+        job_id (str): The Textract Job ID.
+
+    Returns:
+        str: The final status of the Textract job ('SUCCEEDED' or 'FAILED').
+    """
+    textract = boto3.client('textract')
+    
+    while True:
+        try:
+            response = textract.get_document_analysis(JobId=job_id)
+            status = response['JobStatus']
+            if status in ['SUCCEEDED', 'FAILED']:
+                print(f"Textract job completed with status: {status}")
+                return status
+            print(f"Job status: {status}. Waiting...")
+            time.sleep(5)  # Poll every 5 seconds
+        except Exception as e:
+            print(f"Error checking Textract job status: {str(e)}")
+            return None
+
+# Example usage
+if textract_job_id:
+    job_status = wait_for_textract_job(textract_job_id)
+
+
+
+
+
+def retrieve_textract_results(job_id):
+    """
+    Retrieves results from a completed Textract job.
+    
+    Args:
+        job_id (str): The Textract Job ID.
+
+    Returns:
+        list: A list of JSON responses containing extracted data.
+    """
+    textract = boto3.client('textract')
+    results = []
+    
+    try:
+        response = textract.get_document_analysis(JobId=job_id)
+        results.append(response)
+        
+        next_token = response.get('NextToken')
+        while next_token:
+            response = textract.get_document_analysis(JobId=job_id, NextToken=next_token)
+            results.append(response)
+            next_token = response.get('NextToken')
+        
+        print("Textract results retrieved successfully.")
+        return results
+    except Exception as e:
+        print(f"Error retrieving Textract results: {str(e)}")
+        return None
+
+# Example usage
+if textract_job_id and job_status == "SUCCEEDED":
+    textract_results = retrieve_textract_results(textract_job_id)
+
+
+
+
+
+
+
+import os
+
+def process_textract_results(results, output_dir):
+    """
+    Processes Textract results and saves extracted text and tables locally.
+    
+    Args:
+        results (list): List of JSON responses from Textract.
+        output_dir (str): Directory where processed content will be saved.
+        
+    Returns:
+        None
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    extracted_text = ""
+    
+    # Process each result block
+    for result in results:
+        blocks = result['Blocks']
+        
+        for block in blocks:
+            block_type = block['BlockType']
+            
+            if block_type == 'LINE':  # Extract text lines
+                extracted_text += block['Text'] + "\n"
+            
+            elif block_type == 'TABLE':  # Extract table data
+                table_data = []
+                cells = [cell for cell in blocks if cell['BlockType'] == 'CELL']
+                for cell in cells:
+                    row_index = cell['RowIndex']
+                    col_index = cell['ColumnIndex']
+                    text = cell.get('Text', '')
+                    table_data.append((row_index, col_index, text))
+                
+                # Convert table data into a structured format (CSV-like)
+                max_row_index = max([cell[0] for cell in table_data])
+                max_col_index = max([cell[1] for cell in table_data])
+                
+                table_matrix = [["" for _ in range(max_col_index)] for _ in range(max_row_index)]
+                for row_idx, col_idx, text in table_data:
+                    table_matrix[row_idx-1][col_idx-1] = text
+                
+                # Save table as CSV
+                table_file_path = os.path.join(output_dir, f"table_{len(table_matrix)}.csv")
+                with open(table_file_path, "w", encoding="utf-8") as f:
+                    for row in table_matrix:
+                        f.write(",".join(row) + "\n")
+    
+    # Save extracted text
+    text_file_path = os.path.join(output_dir, "extracted_text.txt")
+    with open(text_file_path, "w", encoding="utf-8") as f:
+        f.write(extracted_text)
+
+# Example usage
+output_dir = "./extracted_content"
+if textract_results:
+    process_textract_results(textract_results, output_dir)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import boto3
 import time
 import json
 import os

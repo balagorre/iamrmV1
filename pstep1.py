@@ -210,6 +210,122 @@ if textract_results:
 
 
 
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import boto3
+import json
+
+def chunk_text(text, chunk_size=5000, overlap=500):
+    """
+    Splits text into manageable chunks for processing by Claude.
+    
+    Args:
+        text (str): Full text extracted from the whitepaper.
+        chunk_size (int): Maximum size of each chunk.
+        overlap (int): Overlap between chunks to preserve context.
+
+    Returns:
+        list: List of text chunks.
+    """
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
+    return splitter.split_text(text)
+
+def analyze_chunk_with_claude(chunk, model_id="anthropic.claude-3-haiku-20240307-v1:0"):
+    """
+    Analyzes a single chunk of text using Claude via AWS Bedrock.
+    
+    Args:
+        chunk (str): A chunk of text to analyze.
+        model_id (str): The Claude model ID in AWS Bedrock.
+
+    Returns:
+        dict: Structured insights including summary, model inputs/outputs, assumptions, and limitations.
+    """
+    bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+    
+    prompt = f"""
+    You are an expert auditor reviewing a financial model whitepaper. Analyze the following content:
+
+    {chunk}
+
+    Tasks:
+    1. Summarize key sections of the document.
+    2. Identify all model inputs and outputs.
+    3. List assumptions made in the model.
+    4. Highlight any limitations mentioned.
+
+    Provide your response in JSON format with these keys:
+      - summary
+      - model_inputs
+      - model_outputs
+      - assumptions
+      - limitations
+
+    If information is missing in this chunk, state 'Not found in context.'
+    """
+
+    response = bedrock_client.invoke_model(
+        modelId=model_id,
+        body=json.dumps({
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2048,
+            "temperature": 0.7,
+            "top_p": 0.9,
+        })
+    )
+
+    response_body = json.loads(response['body'].read().decode('utf-8'))
+    
+    try:
+        return json.loads(response_body["content"])
+    except json.JSONDecodeError:
+        print("Failed to parse JSON response from Claude.")
+        return None
+
+def analyze_whitepaper(extracted_text):
+    """
+    Analyzes the entire whitepaper by processing each chunk separately.
+    
+    Args:
+        extracted_text (str): Full text extracted from the whitepaper.
+
+    Returns:
+        dict: Combined analysis results from all chunks.
+    """
+    chunks = chunk_text(extracted_text)
+    
+    combined_results = {
+        "summary": [],
+        "model_inputs": [],
+        "model_outputs": [],
+        "assumptions": [],
+        "limitations": []
+    }
+    
+    for i, chunk in enumerate(chunks):
+        print(f"Processing chunk {i + 1}/{len(chunks)}...")
+        
+        result = analyze_chunk_with_claude(chunk)
+        
+        if result:
+            combined_results["summary"].append(result.get("summary", ""))
+            combined_results["model_inputs"].extend(result.get("model_inputs", []))
+            combined_results["model_outputs"].extend(result.get("model_outputs", []))
+            combined_results["assumptions"].extend(result.get("assumptions", []))
+            combined_results["limitations"].extend(result.get("limitations", []))
+    
+    return combined_results
+
+# Example usage
+with open("./extracted_content/extracted_text.txt", "r", encoding="utf-8") as f:
+    extracted_text = f.read()
+
+whitepaper_analysis = analyze_whitepaper(extracted_text)
+
+# Save analysis results to a file
+with open("./extracted_content/whitepaper_analysis.json", "w", encoding="utf-8") as f:
+    json.dump(whitepaper_analysis, f, indent=2)
+
+print("Whitepaper analysis saved.")
 
 
 
@@ -229,6 +345,8 @@ if textract_results:
 
 
 
+
+##########################################
 
 
 import boto3

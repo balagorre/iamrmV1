@@ -144,3 +144,189 @@ pdf_path = "./data/model_whitepaper.pdf"
 output_dir = "./processed_content"
 
 process_local_pdf(pdf_path, output_dir)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import boto3
+import time
+import json
+import os
+
+def upload_pdf_to_s3(pdf_path, bucket_name, s3_key):
+    """
+    Uploads the PDF to an S3 bucket for processing by Textract.
+    """
+    s3 = boto3.client('s3')
+    try:
+        print(f"Uploading {pdf_path} to S3 bucket {bucket_name}...")
+        s3.upload_file(pdf_path, bucket_name, s3_key)
+        print(f"File uploaded successfully to {bucket_name}/{s3_key}.")
+        return True
+    except Exception as e:
+        print(f"Error uploading file to S3: {str(e)}")
+        return False
+
+def start_textract_job(bucket_name, s3_key):
+    """
+    Starts a Textract job to analyze the PDF for text, tables, and forms.
+    """
+    textract = boto3.client('textract')
+    try:
+        print("Starting Textract job...")
+        response = textract.start_document_analysis(
+            DocumentLocation={'S3Object': {'Bucket': bucket_name, 'Name': s3_key}},
+            FeatureTypes=['TABLES', 'FORMS']  # Extract tables and forms
+        )
+        job_id = response['JobId']
+        print(f"Textract Job ID: {job_id}")
+        return job_id
+    except Exception as e:
+        print(f"Error starting Textract job: {str(e)}")
+        return None
+
+def wait_for_textract_job(job_id):
+    """
+    Waits for the Textract job to complete and returns the status.
+    """
+    textract = boto3.client('textract')
+    while True:
+        try:
+            response = textract.get_document_analysis(JobId=job_id)
+            status = response['JobStatus']
+            if status in ['SUCCEEDED', 'FAILED']:
+                print(f"Textract job completed with status: {status}")
+                return status
+            print(f"Job status: {status}. Waiting...")
+            time.sleep(5)
+        except Exception as e:
+            print(f"Error checking Textract job status: {str(e)}")
+            return None
+
+def retrieve_textract_results(job_id):
+    """
+    Retrieves Textract results after the job is completed.
+    Handles pagination for large documents.
+    """
+    textract = boto3.client('textract')
+    results = []
+    
+    try:
+        response = textract.get_document_analysis(JobId=job_id)
+        results.append(response)
+        
+        next_token = response.get('NextToken')
+        while next_token:
+            response = textract.get_document_analysis(JobId=job_id, NextToken=next_token)
+            results.append(response)
+            next_token = response.get('NextToken')
+        
+        print("Textract results retrieved successfully.")
+        return results
+    except Exception as e:
+        print(f"Error retrieving Textract results: {str(e)}")
+        return None
+
+def process_textract_results(results, output_dir):
+    """
+    Processes Textract results to extract text, tables, and forms.
+    Saves extracted data into separate files for downstream analysis.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Initialize containers for extracted data
+    extracted_text = ""
+    tables = []
+    
+    # Process each result block
+    for result in results:
+        blocks = result['Blocks']
+        
+        for block in blocks:
+            block_type = block['BlockType']
+            
+            if block_type == 'LINE':  # Extract text lines
+                extracted_text += block['Text'] + "\n"
+            
+            elif block_type == 'TABLE':  # Extract table data
+                table_data = []
+                cells = [cell for cell in blocks if cell['BlockType'] == 'CELL']
+                for cell in cells:
+                    row_index = cell['RowIndex']
+                    col_index = cell['ColumnIndex']
+                    text = cell.get('Text', '')
+                    table_data.append((row_index, col_index, text))
+                
+                # Convert table data into a structured format (CSV-like)
+                max_row_index = max([cell[0] for cell in table_data])
+                max_col_index = max([cell[1] for cell in table_data])
+                
+                table_matrix = [["" for _ in range(max_col_index)] for _ in range(max_row_index)]
+                for row_idx, col_idx, text in table_data:
+                    table_matrix[row_idx-1][col_idx-1] = text
+                
+                tables.append(table_matrix)
+    
+    # Save extracted text
+    with open(os.path.join(output_dir, "extracted_text.txt"), "w", encoding="utf-8") as f:
+        f.write(extracted_text)
+    
+    # Save extracted tables as CSV files
+    for i, table in enumerate(tables):
+        table_path = os.path.join(output_dir, f"table_{i+1}.csv")
+        with open(table_path, "w", encoding="utf-8") as f:
+            for row in table:
+                f.write(",".join(row) + "\n")
+    
+    print("Extracted content saved successfully.")
+    
+# Main function to execute the enhanced step 1 workflow
+def extract_content_from_pdf(pdf_path, bucket_name, s3_key, output_dir):
+    """
+    Executes the full workflow of uploading a PDF to S3,
+    processing it with Textract, and saving extracted content locally.
+    """
+    # Step 1: Upload the PDF to S3
+    if not upload_pdf_to_s3(pdf_path, bucket_name, s3_key):
+        print("Failed to upload PDF to S3. Exiting.")
+        return
+    
+    # Step 2: Start Textract job
+    job_id = start_textract_job(bucket_name, s3_key)
+    if not job_id:
+        print("Failed to start Textract job. Exiting.")
+        return
+    
+    # Step 3: Wait for Textract job completion
+    status = wait_for_textract_job(job_id)
+    if status != "SUCCEEDED":
+        print("Textract job did not succeed. Exiting.")
+        return
+    
+    # Step 4: Retrieve Textract results
+    results = retrieve_textract_results(job_id)
+    
+    # Step 5: Process and save extracted content
+    process_textract_results(results, output_dir)
+
+# Example usage
+pdf_path = "./data/model_whitepaper.pdf"
+bucket_name = "your-s3-bucket-name"
+s3_key = "documents/model_whitepaper.pdf"
+output_dir = "./extracted_content"
+
+extract_content_from_pdf(pdf_path, bucket_name, s3_key, output_dir)

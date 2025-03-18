@@ -96,6 +96,10 @@ def create_prompt_with_examples(chunk, chunk_id):
 
 import boto3
 import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logging.basicConfig(level=logging.INFO)
 
 def analyze_chunk_with_claude(chunk, chunk_id):
     """
@@ -106,13 +110,14 @@ def analyze_chunk_with_claude(chunk, chunk_id):
         chunk_id (int): Unique identifier for the chunk.
 
     Returns:
-        str: Plain text response from Claude.
+        dict: Parsed structured data from Claude's response or an error message.
     """
     bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
     
     prompt = create_prompt_with_examples(chunk, chunk_id)
     
     try:
+        # Invoke Claude via AWS Bedrock
         response = bedrock_client.invoke_model(
             modelId="anthropic.claude-3-haiku-20240307-v1:0",
             body=json.dumps({
@@ -123,104 +128,54 @@ def analyze_chunk_with_claude(chunk, chunk_id):
             })
         )
         
+        # Parse the response
         response_body = json.loads(response['body'].read().decode('utf-8'))
+        response_text = response_body["content"]
         
-        return response_body["content"]
+        # Parse the plain-text response into structured data
+        return parse_enhanced_response(response_text)
     
     except Exception as e:
         logging.error(f"Error processing chunk {chunk_id}: {str(e)}")
-        return f"Error processing chunk {chunk_id}: {str(e)}"
+        return {"chunk_id": chunk_id, "error": f"Failed to process chunk {chunk_id}: {str(e)}"}
 
 
 
-def parse_enhanced_response(response_text):
+def process_chunks_concurrently(chunks):
     """
-    Parses enhanced plain text response from Claude into structured data.
+    Processes all chunks concurrently using multi-threading.
     
     Args:
-        response_text (str): Plain text response from Claude.
+        chunks (list): List of text chunks to process.
 
     Returns:
-        dict: Parsed structured data including summary, inputs/outputs,
-              calculations, model performance, solution specification,
-              testing summary, and reconciliation.
+        list: List of parsed results from all chunks.
     """
-    try:
-        parsed_data = {
-            "chunk_id": "",
-            "summary": "",
-            "inputs": [],
-            "outputs": [],
-            "calculations": [],
-            "model_performance": [],
-            "solution_specification": [],
-            "testing_summary": [],
-            "reconciliation": []
-        }
-        
-        # Split response into sections based on headers
-        sections = response_text.split("\n\n")
-        
-        for section in sections:
-            if section.startswith("Chunk ID:"):
-                parsed_data["chunk_id"] = section.split(":")[1].strip()
-            
-            elif section.startswith("Summary:"):
-                parsed_data["summary"] = section.replace("Summary:", "").strip()
-            
-            elif section.startswith("Inputs:"):
-                inputs_raw = section.replace("Inputs:", "").strip().split("\n")
-                for input_line in inputs_raw:
-                    if ":" in input_line and "(" in input_line:
-                        name, rest = input_line.split(":", 1)
-                        description_format = rest.strip().split("(")
-                        description = description_format[0].strip()
-                        format_type = description_format[1].replace(")", "").strip() if len(description_format) > 1 else ""
-                        parsed_data["inputs"].append({
-                            "name": name.strip(),
-                            "description": description,
-                            "format": format_type
-                        })
-            
-            elif section.startswith("Outputs:"):
-                outputs_raw = section.replace("Outputs:", "").strip().split("\n")
-                for output_line in outputs_raw:
-                    if ":" in output_line and "(" in output_line:
-                        name, rest = output_line.split(":", 1)
-                        description_format = rest.strip().split("(")
-                        description = description_format[0].strip()
-                        format_type = description_format[1].replace(")", "").strip() if len(description_format) > 1 else ""
-                        parsed_data["outputs"].append({
-                            "name": name.strip(),
-                            "description": description,
-                            "format": format_type
-                        })
-            
-            elif section.startswith("Calculations:"):
-                calculations_raw = section.replace("Calculations:", "").strip().split("\n")
-                parsed_data["calculations"] = [calc.strip("- ").strip() for calc in calculations_raw]
-            
-            elif section.startswith("Model Performance:"):
-                performance_raw = section.replace("Model Performance:", "").strip().split("\n")
-                parsed_data["model_performance"] = [perf.strip("- ").strip() for perf in performance_raw]
-            
-            elif section.startswith("Solution Specification:"):
-                specification_raw = section.replace("Solution Specification:", "").strip().split("\n")
-                parsed_data["solution_specification"] = [spec.strip("- ").strip() for spec in specification_raw]
-            
-            elif section.startswith("Testing Summary:"):
-                testing_raw = section.replace("Testing Summary:", "").strip().split("\n")
-                parsed_data["testing_summary"] = [test.strip("- ").strip() for test in testing_raw]
-            
-            elif section.startswith("Reconciliation:"):
-                reconciliation_raw = section.replace("Reconciliation:", "").strip().split("\n")
-                parsed_data["reconciliation"] = [rec.strip("- ").strip() for rec in reconciliation_raw]
-        
-        return parsed_data
+    results = []
     
-    except Exception as e:
-        print(f"Error parsing enhanced response: {str(e)}")
-        return {"error": f"Failed to parse response: {response_text}"}
+    logging.info(f"Processing {len(chunks)} chunks concurrently...")
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        # Submit tasks for each chunk
+        futures = [
+            executor.submit(analyze_chunk_with_claude, chunk, i + 1)
+            for i, chunk in enumerate(chunks)
+        ]
+        
+        # Collect results as they complete
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                logging.error(f"Error in thread execution: {str(e)}")
+    
+    logging.info("All chunks processed.")
+    
+    return results
+
+# Example usage
+results = process_chunks_concurrently(chunks)
 
 
 def consolidate_results(results):
@@ -299,17 +254,7 @@ def consolidate_results(results):
     return consolidated
 
 # Example usage
-parsed_results = [
-    {
-      "chunk_id": "1",
-      "summary": "This chunk describes the model's architecture.",
-      "inputs": [{"name": "input_1", "description": "...", "format": "numerical"}],
-      ...
-    },
-    ...
-]
-
-final_results = consolidate_results(parsed_results)
+final_results = consolidate_results(results)
 
 # Save final results to file
 import json

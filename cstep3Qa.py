@@ -68,12 +68,13 @@ def vector_search_retriever(query, top_k=5, score_threshold=0.3):
         # Apply a score threshold to filter out low-relevance chunks
         filtered_results = []
         for idx, metadata in enumerate(results.get('metadatas', [])):
-            score = results.get('distances', [[1.0]])[0][idx] if 'distances' in results and isinstance(results.get('distances', []), list) and len(results.get('distances', [])) > 0 else 1.0  # ChromaDB uses distance (lower is better)
+            score_list = results.get('distances', [[1.0]])
+            score = score_list[idx] if isinstance(score_list, list) and len(score_list) > idx else 1.0 if 'distances' in results and isinstance(results.get('distances', []), list) and len(results.get('distances', [])) > 0 else 1.0  # ChromaDB uses distance (lower is better)
             if score < score_threshold:
                 filtered_results.append(metadata.get("insights", "No insights found"))
         
         return filtered_results[:top_k] if filtered_results else []
-        return [metadata.get("insights", "No insights found") for metadata in results.get("metadatas", []) if isinstance(metadata, dict)]
+        
     except Exception as e:
         logging.error("Error retrieving from vector search: %s", str(e))
         return []
@@ -85,8 +86,8 @@ def bm25_search_retriever(query, knowledge_base, top_k=5, use_stopwords=True):
     try:
         from rank_bm25 import BM25Okapi
         corpus = [entry.get("insights", "") for entry in knowledge_base]
-        from nltk.corpus import stopwords
-        stop_words = set(stopwords.words('english')) if use_stopwords else set()
+        stop_words = {"the", "is", "in", "and", "to", "of", "a", "for", "on", "with", "as", "by", "an", "at", "from", "or", "but", "not", "be", "are", "this", "that", "it", "we", "you", "he", "she", "they", "them", "can", "will", "just", "so", "if", "than", "because", "about", "while", "during", "before", "after", "above", "below", "under", "over", "again", "further", "then", "once", "here", "there", "where", "why", "how", "all", "any", "both", "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very"}
+          # Fallback if stopwords are not downloaded
         tokenized_corpus = [[word for word in doc.split() if word.lower() not in stop_words] for doc in corpus]
         bm25 = BM25Okapi(tokenized_corpus)
         top_results = bm25.get_top_n(query.split(), corpus, n=top_k)
@@ -107,9 +108,11 @@ def search_knowledge_base(query, knowledge_base, top_k=5, vector_score_threshold
     
     # Assign weighted scores: 0.7 weight for vector search, 0.3 weight for BM25
     for idx, doc in enumerate(vector_results):
-        combined_results[doc] = combined_results.get(doc, 0) + (0.7 * (top_k - idx))
+        vector_weight = 0.7 if vector_results else 0.5
+    bm25_weight = 0.3 if bm25_results else 0.5
+    combined_results[doc] = combined_results.get(doc, 0) + (vector_weight * (top_k - idx))
     for idx, doc in enumerate(bm25_results):
-        combined_results[doc] = combined_results.get(doc, 0) + (0.3 * (top_k - idx))
+        combined_results[doc] = combined_results.get(doc, 0) + (bm25_weight * (top_k - idx))
     
     # Sort results by weighted scores
     sorted_results = sorted(combined_results.keys(), key=lambda x: combined_results[x], reverse=True)

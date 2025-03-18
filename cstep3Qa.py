@@ -148,6 +148,7 @@ interactive_qa_system(kb_file)
 
 
 
+
 import json
 import boto3
 import numpy as np

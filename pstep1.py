@@ -569,6 +569,10 @@ with open("./extracted_content/whitepaper_analysis_parallel.json", "w", encoding
 
 print("Whitepaper analysis saved.")
 
+
+
+
+
 def consolidate_results(results):
     """
     Consolidates results from all chunks into a single structured output.
@@ -599,16 +603,6 @@ def consolidate_results(results):
         consolidated["limitations"].extend(result.get("limitations", []))
     
     return consolidated
-
-# Consolidate results
-final_analysis = consolidate_results(whitepaper_analysis_parallel)
-
-# Save consolidated results
-with open("./extracted_content/final_whitepaper_analysis.json", "w", encoding="utf-8") as f:
-    json.dump(final_analysis, f, indent=2)
-
-print("Final whitepaper analysis saved.")
-
 
 
 

@@ -208,13 +208,10 @@ if textract_results:
     process_textract_results(textract_results, output_dir)
 
 
-
-
+#####
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import boto3
-import json
 
-def chunk_text(text, chunk_size=5000, overlap=500):
+def chunk_text(text, chunk_size=5000, overlap=200):
     """
     Splits text into manageable chunks for processing by Claude.
     
@@ -229,12 +226,73 @@ def chunk_text(text, chunk_size=5000, overlap=500):
     splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
     return splitter.split_text(text)
 
-def analyze_chunk_with_claude(chunk, model_id="anthropic.claude-3-haiku-20240307-v1:0"):
+
+def create_prompt(chunk):
+    """
+    Creates a detailed prompt for analyzing a chunk of text using Claude.
+    
+    Args:
+        chunk (str): A chunk of text to analyze.
+
+    Returns:
+        str: A formatted prompt string.
+    """
+    prompt = f"""
+    You are an expert auditor reviewing a financial model whitepaper. Analyze the following content:
+
+    {chunk}
+
+    Tasks:
+    1. Provide a summary of this content.
+    2. Identify all model inputs and describe their purpose and format (e.g., numerical, categorical).
+    3. Identify all model outputs and describe their purpose and format (e.g., numerical, categorical).
+    4. List all assumptions made in this content and explain their significance.
+    5. Highlight any limitations mentioned in this content and explain their impact on the model.
+
+    Instructions:
+    - If specific information is missing in this chunk, state "Not found in context."
+    - Provide your response in JSON format with these keys:
+      - "summary"
+      - "model_inputs" (list of dictionaries with keys: "name", "description", "format")
+      - "model_outputs" (list of dictionaries with keys: "name", "description", "format")
+      - "assumptions" (list of strings)
+      - "limitations" (list of strings)
+      - "chunk_id" (unique identifier for this chunk)
+      
+    Example JSON response:
+    {{
+        "summary": "This section describes...",
+        "model_inputs": [
+            {{"name": "input_1", "description": "Description of input_1", "format": "numerical"}},
+            {{"name": "input_2", "description": "Description of input_2", "format": "categorical"}}
+        ],
+        "model_outputs": [
+            {{"name": "output_1", "description": "Description of output_1", "format": "numerical"}}
+        ],
+        "assumptions": ["Assumption_1", "Assumption_2"],
+        "limitations": ["Limitation_1", "Limitation_2"],
+        "chunk_id": <chunk_id>
+    }}
+    
+    Process this content carefully and return only valid JSON output between triple backticks."""
+    
+    return prompt
+
+import boto3
+import json
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+def analyze_chunk_with_claude(chunk, chunk_id, model_id="anthropic.claude-3-haiku-20240307-v1:0"):
     """
     Analyzes a single chunk of text using Claude via AWS Bedrock.
     
     Args:
         chunk (str): A chunk of text to analyze.
+        chunk_id (int): Unique identifier for the chunk.
         model_id (str): The Claude model ID in AWS Bedrock.
 
     Returns:
@@ -242,58 +300,82 @@ def analyze_chunk_with_claude(chunk, model_id="anthropic.claude-3-haiku-20240307
     """
     bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
     
-    prompt = f"""
-    You are an expert auditor reviewing a financial model whitepaper. Analyze the following content:
-
-    {chunk}
-
-    Tasks:
-    1. Summarize key sections of the document.
-    2. Identify all model inputs and outputs.
-    3. List assumptions made in the model.
-    4. Highlight any limitations mentioned.
-
-    Provide your response in JSON format with these keys:
-      - summary
-      - model_inputs
-      - model_outputs
-      - assumptions
-      - limitations
-
-    If information is missing in this chunk, state 'Not found in context.'
-    """
-
-    response = bedrock_client.invoke_model(
-        modelId=model_id,
-        body=json.dumps({
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 2048,
-            "temperature": 0.7,
-            "top_p": 0.9,
-        })
-    )
-
-    response_body = json.loads(response['body'].read().decode('utf-8'))
+    prompt = create_prompt(chunk).replace("<chunk_id>", str(chunk_id))
     
     try:
+        response = bedrock_client.invoke_model(
+            modelId=model_id,
+            body=json.dumps({
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2048,
+                "temperature": 0.7,
+                "top_p": 0.9,
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        
+        # Parse JSON response from Claude
         return json.loads(response_body["content"])
-    except json.JSONDecodeError:
-        print("Failed to parse JSON response from Claude.")
-        return None
+    
+    except Exception as e:
+        logging.error(f"Error processing chunk {chunk_id}: {str(e)}")
+        return {"error": f"Failed to process chunk {chunk_id}"}
 
-def analyze_whitepaper(extracted_text):
+def analyze_whitepaper_parallel(extracted_text, max_threads=10):
     """
-    Analyzes the entire whitepaper by processing each chunk separately.
+    Analyzes the entire whitepaper by processing chunks in parallel.
     
     Args:
         extracted_text (str): Full text extracted from the whitepaper.
+        max_threads (int): Maximum number of threads for parallel processing.
 
     Returns:
-        dict: Combined analysis results from all chunks.
+        list: Combined analysis results from all chunks.
     """
     chunks = chunk_text(extracted_text)
     
-    combined_results = {
+    results = []
+    
+    logging.info(f"Processing {len(chunks)} chunks with {max_threads} threads...")
+    
+    with ThreadPoolExecutor(max_threads) as executor:
+        futures = [
+            executor.submit(analyze_chunk_with_claude, chunk, i + 1)
+            for i, chunk in enumerate(chunks)
+        ]
+        
+        for future in futures:
+            result = future.result()
+            results.append(result)
+    
+    logging.info("All chunks processed.")
+    
+    return results
+
+# Example usage
+with open("./extracted_content/extracted_text.txt", "r", encoding="utf-8") as f:
+    extracted_text = f.read()
+
+whitepaper_analysis_parallel = analyze_whitepaper_parallel(extracted_text)
+
+# Save analysis results to a file
+with open("./extracted_content/whitepaper_analysis_parallel.json", "w", encoding="utf-8") as f:
+    json.dump(whitepaper_analysis_parallel, f, indent=2)
+
+print("Whitepaper analysis saved.")
+
+def consolidate_results(results):
+    """
+    Consolidates results from all chunks into a single structured output.
+    
+    Args:
+        results (list): List of results from individual chunks.
+
+    Returns:
+        dict: Consolidated results including summaries, inputs/outputs, assumptions, and limitations.
+    """
+    consolidated = {
         "summary": [],
         "model_inputs": [],
         "model_outputs": [],
@@ -301,31 +383,29 @@ def analyze_whitepaper(extracted_text):
         "limitations": []
     }
     
-    for i, chunk in enumerate(chunks):
-        print(f"Processing chunk {i + 1}/{len(chunks)}...")
+    for result in results:
+        if result.get("error"):
+            logging.warning(f"Skipping failed result: {result['error']}")
+            continue
         
-        result = analyze_chunk_with_claude(chunk)
-        
-        if result:
-            combined_results["summary"].append(result.get("summary", ""))
-            combined_results["model_inputs"].extend(result.get("model_inputs", []))
-            combined_results["model_outputs"].extend(result.get("model_outputs", []))
-            combined_results["assumptions"].extend(result.get("assumptions", []))
-            combined_results["limitations"].extend(result.get("limitations", []))
+        consolidated["summary"].append(result.get("summary", "").strip())
+        consolidated["model_inputs"].extend(result.get("model_inputs", []))
+        consolidated["model_outputs"].extend(result.get("model_outputs", []))
+        consolidated["assumptions"].extend(result.get("assumptions", []))
+        consolidated["limitations"].extend(result.get("limitations", []))
     
-    return combined_results
+    return consolidated
 
-# Example usage
-with open("./extracted_content/extracted_text.txt", "r", encoding="utf-8") as f:
-    extracted_text = f.read()
+# Consolidate results
+final_analysis = consolidate_results(whitepaper_analysis_parallel)
 
-whitepaper_analysis = analyze_whitepaper(extracted_text)
+# Save consolidated results
+with open("./extracted_content/final_whitepaper_analysis.json", "w", encoding="utf-8") as f:
+    json.dump(final_analysis, f, indent=2)
 
-# Save analysis results to a file
-with open("./extracted_content/whitepaper_analysis.json", "w", encoding="utf-8") as f:
-    json.dump(whitepaper_analysis, f, indent=2)
+print("Final whitepaper analysis saved.")
 
-print("Whitepaper analysis saved.")
+
 
 
 

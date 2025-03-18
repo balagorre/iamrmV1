@@ -211,13 +211,15 @@ if textract_results:
 #####
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-def chunk_text(text, chunk_size=5000, overlap=200):
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+def chunk_text(text, chunk_size=10000, overlap=500):
     """
     Splits text into manageable chunks for processing by Claude.
     
     Args:
         text (str): Full text extracted from the whitepaper.
-        chunk_size (int): Maximum size of each chunk.
+        chunk_size (int): Maximum size of each chunk in tokens.
         overlap (int): Overlap between chunks to preserve context.
 
     Returns:
@@ -227,12 +229,13 @@ def chunk_text(text, chunk_size=5000, overlap=200):
     return splitter.split_text(text)
 
 
-def create_prompt(chunk):
+def create_prompt_xml(chunk, chunk_id):
     """
     Creates a detailed prompt for analyzing a chunk of text using Claude.
     
     Args:
         chunk (str): A chunk of text to analyze.
+        chunk_id (int): Unique identifier for the chunk.
 
     Returns:
         str: A formatted prompt string.
@@ -251,32 +254,233 @@ def create_prompt(chunk):
 
     Instructions:
     - If specific information is missing in this chunk, state "Not found in context."
-    - Provide your response in JSON format with these keys:
-      - "summary"
-      - "model_inputs" (list of dictionaries with keys: "name", "description", "format")
-      - "model_outputs" (list of dictionaries with keys: "name", "description", "format")
-      - "assumptions" (list of strings)
-      - "limitations" (list of strings)
-      - "chunk_id" (unique identifier for this chunk)
-      
-    Example JSON response:
-    {{
-        "summary": "This section describes...",
-        "model_inputs": [
-            {{"name": "input_1", "description": "Description of input_1", "format": "numerical"}},
-            {{"name": "input_2", "description": "Description of input_2", "format": "categorical"}}
-        ],
-        "model_outputs": [
-            {{"name": "output_1", "description": "Description of output_1", "format": "numerical"}}
-        ],
-        "assumptions": ["Assumption_1", "Assumption_2"],
-        "limitations": ["Limitation_1", "Limitation_2"],
-        "chunk_id": <chunk_id>
-    }}
-    
-    Process this content carefully and return only valid JSON output between triple backticks."""
+    - Provide your response in XML format with the following structure:
+
+      <response chunk_id="{chunk_id}">
+        <summary>
+          <text>This section describes...</text>
+        </summary>
+        <model_inputs>
+          <input>
+            <name>input_1</name>
+            <description>Description of input_1</description>
+            <format>numerical</format>
+          </input>
+          <input>
+            <name>input_2</name>
+            <description>Description of input_2</description>
+            <format>categorical</format>
+          </input>
+        </model_inputs>
+        <model_outputs>
+          <output>
+            <name>output_1</name>
+            <description>Description of output_1</description>
+            <format>numerical</format>
+          </output>
+        </model_outputs>
+        <assumptions>
+          <assumption>Assumption_1</assumption>
+          <assumption>Assumption_2</assumption>
+        </assumptions>
+        <limitations>
+          <limitation>Limitation_1</limitation>
+          <limitation>Limitation_2</limitation>
+        </limitations>
+      </response>
+
+    Return only valid XML output."""
     
     return prompt
+
+import xml.etree.ElementTree as ET
+
+def parse_xml_response(response_text):
+    """
+    Parses an XML response from Claude into structured data.
+    
+    Args:
+        response_text (str): The XML response from Claude.
+
+    Returns:
+        dict: Parsed structured data including summary, inputs, outputs, assumptions, and limitations.
+    """
+    try:
+        root = ET.fromstring(response_text)  # Parse the XML string
+        
+        parsed_data = {
+            "chunk_id": root.attrib.get("chunk_id", ""),
+            "summary": root.find("summary/text").text if root.find("summary/text") is not None else "",
+            "model_inputs": [],
+            "model_outputs": [],
+            "assumptions": [],
+            "limitations": []
+        }
+        
+        # Parse model inputs
+        for input_elem in root.findall("model_inputs/input"):
+            parsed_data["model_inputs"].append({
+                "name": input_elem.find("name").text,
+                "description": input_elem.find("description").text,
+                "format": input_elem.find("format").text
+            })
+        
+        # Parse model outputs
+        for output_elem in root.findall("model_outputs/output"):
+            parsed_data["model_outputs"].append({
+                "name": output_elem.find("name").text,
+                "description": output_elem.find("description").text,
+                "format": output_elem.find("format").text
+            })
+        
+        # Parse assumptions
+        for assumption_elem in root.findall("assumptions/assumption"):
+            parsed_data["assumptions"].append(assumption_elem.text)
+        
+        # Parse limitations
+        for limitation_elem in root.findall("limitations/limitation"):
+            parsed_data["limitations"].append(limitation_elem.text)
+        
+        return parsed_data
+    
+    except Exception as e:
+        print(f"Error parsing XML response: {str(e)}")
+        return {"error": f"Failed to parse response: {response_text}"}
+
+
+
+
+import boto3
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
+logging.basicConfig(level=logging.INFO)
+
+def analyze_chunk_with_claude_xml(chunk, chunk_id):
+    """
+    Analyzes a single chunk of text using Claude via AWS Bedrock.
+    
+    Args:
+        chunk (str): A chunk of text to analyze.
+        chunk_id (int): Unique identifier for the chunk.
+
+    Returns:
+        dict: Parsed structured data including summary, inputs/outputs, assumptions, and limitations.
+    """
+    bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+    
+    prompt = create_prompt_xml(chunk, chunk_id)
+    
+    try:
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2048,
+                "temperature": 0.7,
+                "top_p": 0.9,
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        
+        # Parse XML response
+        return parse_xml_response(response_body["content"])
+    
+    except Exception as e:
+        logging.error(f"Error processing chunk {chunk_id}: {str(e)}")
+        return {"error": f"Failed to process chunk {chunk_id}"}
+
+def analyze_whitepaper_parallel_xml(extracted_text):
+    """
+    Processes chunks of extracted text in parallel using multithreading.
+    
+    Args:
+        extracted_text (str): Full text extracted from the whitepaper.
+
+    Returns:
+        list: Combined analysis results from all chunks.
+    """
+    chunks = chunk_text(extracted_text)
+    
+    results = []
+    
+    logging.info(f"Processing {len(chunks)} chunks...")
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(analyze_chunk_with_claude_xml, chunk, i + 1)
+            for i, chunk in enumerate(chunks)
+        ]
+        
+        for future in futures:
+            result = future.result()
+            results.append(result)
+    
+    logging.info("All chunks processed.")
+    
+    return results
+
+# Example usage
+with open("./extracted_content/extracted_text.txt", "r", encoding="utf-8") as f:
+    extracted_text = f.read()
+
+whitepaper_analysis_parallel_xml = analyze_whitepaper_parallel_xml(extracted_text)
+
+# Save analysis results to a file
+with open("./extracted_content/whitepaper_analysis_parallel.xml.json", "w", encoding="utf-8") as f:
+    json.dump(whitepaper_analysis_parallel_xml, f, indent=2)
+
+print("Whitepaper analysis saved.")
+
+
+def consolidate_results(results):
+    """
+    Consolidates results from all chunks into a single structured output.
+    
+    Args:
+        results (list): List of results from individual chunks.
+
+    Returns:
+        dict: Consolidated results including summaries, inputs/outputs, assumptions, and limitations.
+    """
+    consolidated = {
+        "summary": [],
+        "model_inputs": [],
+        "model_outputs": [],
+        "assumptions": [],
+        "limitations": []
+    }
+    
+    for result in results:
+        if result.get("error"):
+            logging.warning(f"Skipping failed result: {result['error']}")
+            continue
+        
+        consolidated["summary"].append(result.get("summary", "").strip())
+        consolidated["model_inputs"].extend(result.get("model_inputs", []))
+        consolidated["model_outputs"].extend(result.get("model_outputs", []))
+        consolidated["assumptions"].extend(result.get("assumptions", []))
+        consolidated["limitations"].extend(result.get("limitations", []))
+    
+    return consolidated
+
+# Consolidate results
+final_analysis = consolidate_results(whitepaper_analysis_parallel_xml)
+
+# Save consolidated results
+with open("./extracted_content/final_whitepaper_analysis.json", "w", encoding="utf-8") as f:
+    json.dump(final_analysis, f, indent=2)
+
+print("Final whitepaper analysis saved.")
+
+
+
+
+
+
+
+
 
 import boto3
 import json

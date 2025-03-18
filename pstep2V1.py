@@ -1,3 +1,94 @@
+def parse_enhanced_response(response_text):
+    """
+    Parses enhanced plain text response from Claude into structured data.
+    
+    Args:
+        response_text (str): Plain text response from Claude.
+
+    Returns:
+        dict: Parsed structured data including summary, inputs/outputs,
+              calculations, model performance, solution specification,
+              testing summary, and reconciliation.
+    """
+    try:
+        parsed_data = {
+            "chunk_id": "",
+            "summary": "",
+            "inputs": [],
+            "outputs": [],
+            "calculations": [],
+            "model_performance": [],
+            "solution_specification": [],
+            "testing_summary": [],
+            "reconciliation": []
+        }
+        
+        # Split response into sections based on headers
+        sections = response_text.split("\n\n")
+        
+        for section in sections:
+            if section.startswith("Chunk ID:"):
+                parsed_data["chunk_id"] = section.split(":")[1].strip()
+            
+            elif section.startswith("Summary:"):
+                parsed_data["summary"] = section.replace("Summary:", "").strip()
+            
+            elif section.startswith("Inputs:"):
+                inputs_raw = section.replace("Inputs:", "").strip().split("\n")
+                for input_line in inputs_raw:
+                    if ":" in input_line and "(" in input_line:
+                        name, rest = input_line.split(":", 1)
+                        description_format = rest.strip().split("(")
+                        description = description_format[0].strip()
+                        format_type = description_format[1].replace(")", "").strip() if len(description_format) > 1 else ""
+                        parsed_data["inputs"].append({
+                            "name": name.strip(),
+                            "description": description,
+                            "format": format_type
+                        })
+            
+            elif section.startswith("Outputs:"):
+                outputs_raw = section.replace("Outputs:", "").strip().split("\n")
+                for output_line in outputs_raw:
+                    if ":" in output_line and "(" in output_line:
+                        name, rest = output_line.split(":", 1)
+                        description_format = rest.strip().split("(")
+                        description = description_format[0].strip()
+                        format_type = description_format[1].replace(")", "").strip() if len(description_format) > 1 else ""
+                        parsed_data["outputs"].append({
+                            "name": name.strip(),
+                            "description": description,
+                            "format": format_type
+                        })
+            
+            elif section.startswith("Calculations:"):
+                calculations_raw = section.replace("Calculations:", "").strip().split("\n")
+                parsed_data["calculations"] = [calc.strip("- ").strip() for calc in calculations_raw]
+            
+            elif section.startswith("Model Performance:"):
+                performance_raw = section.replace("Model Performance:", "").strip().split("\n")
+                parsed_data["model_performance"] = [perf.strip("- ").strip() for perf in performance_raw]
+            
+            elif section.startswith("Solution Specification:"):
+                specification_raw = section.replace("Solution Specification:", "").strip().split("\n")
+                parsed_data["solution_specification"] = [spec.strip("- ").strip() for spec in specification_raw]
+            
+            elif section.startswith("Testing Summary:"):
+                testing_raw = section.replace("Testing Summary:", "").strip().split("\n")
+                parsed_data["testing_summary"] = [test.strip("- ").strip() for test in testing_raw]
+            
+            elif section.startswith("Reconciliation:"):
+                reconciliation_raw = section.replace("Reconciliation:", "").strip().split("\n")
+                parsed_data["reconciliation"] = [rec.strip("- ").strip() for rec in reconciliation_raw]
+        
+        return parsed_data
+    
+    except Exception as e:
+        print(f"Error parsing enhanced response: {str(e)}")
+        return {"error": f"Failed to parse response: {response_text}"}
+
+
+
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 def chunk_text(text, chunk_size=10000, overlap=500):

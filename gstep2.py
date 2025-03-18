@@ -1,3 +1,246 @@
+import json
+import boto3
+import os
+import re
+from typing import List, Dict, Optional, Any
+from pydantic import BaseModel, ValidationError, Field
+
+# --- Configuration ---
+PREPROCESSED_DIR = 'preprocessed_pdfs'
+EXTRACTED_DIR = 'extracted_data'
+MAX_RETRIES = 3
+
+# --- AWS Bedrock Client ---
+bedrock = boto3.client('bedrock-runtime')
+
+# --- Pydantic Models (Whitepaper Only) ---
+
+class Input(BaseModel):
+    name: str
+    description: str
+    data_type: str
+
+class Output(BaseModel):
+    name: str
+    description: str
+    data_type: str
+
+class Calculation(BaseModel):
+    step: str
+    formula: str
+    description: str
+
+class Assumption(BaseModel):
+    description: str
+
+class Limitation(BaseModel):
+    description: str
+
+class Whitepaper(BaseModel):
+    model_name: str
+    version: str
+    inputs: List[Input]
+    outputs: List[Output]
+    calculations: List[Calculation]
+    model_performance: str
+    assumptions: Optional[List[Assumption]] = None
+    limitations: Optional[List[Limitation]] = None
+
+# --- Prompt Template (Whitepaper Only) ---
+
+def get_whitepaper_prompt_template():
+    return """
+Extract the following information from the provided model whitepaper text and return ONLY a JSON object.
+
+Preprocessed text:
+{preprocessed_text}
+
+Extract:
+- model_name: The name of the model.
+- version: The model's version.
+- inputs: A list of model inputs (name, description, data type).
+- outputs: A list of model outputs (name, description, data type).
+- calculations: A list of calculations (step, formula, description).
+- model_performance: Description of model performance.
+- assumptions: A list of assumptions (optional).
+- limitations: A list of limitations (optional).
+
+Return ONLY a JSON object. Do NOT include any other text.
+"""
+
+# --- Few-Shot Example (Whitepaper - Ensure VALID JSON) ---
+def get_whitepaper_few_shot_example():
+    return """
+{
+  "model_name": "Advanced Loan Risk Assessment Model",
+  "version": "2.1",
+  "inputs": [
+    {
+      "name": "Borrower Annual Income",
+      "description": "The annual income.",
+      "data_type": "float"
+    },
+    {
+      "name": "Loan-to-Value Ratio",
+      "description": "The ratio of the loan amount to the value.",
+      "data_type": "float"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "Predicted Default Probability",
+      "description": "Probability of loan default.",
+      "data_type": "float"
+    }
+  ],
+  "calculations": [
+    {
+      "step": "1",
+      "formula": "score = (income_weight * income) + (ltv_weight * ltv)",
+      "description": "Calculate a weighted score."
+    }
+  ],
+  "model_performance": "AUC of 0.85.",
+  "assumptions": [
+    {
+      "description": "Stable relationship between inputs and default probability."
+    }
+  ],
+  "limitations": [
+    {
+      "description": "Does not account for macroeconomic factors."
+    }
+  ]
+}
+    """
+# --- Core Processing Function (with Pydantic and Retry) ---
+
+def process_file_chunk(file_path):
+    """Processes a whitepaper chunk, parses with Pydantic, retries."""
+    try:
+        with open(file_path, 'r') as f:
+            preprocessed_data = json.load(f)
+
+        prompt_template = get_whitepaper_prompt_template()
+        few_shot_example = get_whitepaper_few_shot_example()
+        model_class = Whitepaper
+
+        prompt = prompt_template.format(preprocessed_text=preprocessed_data['text'], few_shot_example=few_shot_example)
+        retries = 0
+        while retries < MAX_RETRIES:
+            try:
+                response = bedrock.invoke_model(
+                    body=json.dumps({
+                        "prompt": f"\n\nHuman:{prompt}\n\nAssistant:",
+                        "max_tokens_to_sample": 4096,
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                    }),
+                    modelId="anthropic.claude-v3-sonnet",
+                    contentType="application/json",
+                    accept="application/json"
+                )
+
+                response_body = json.loads(response.get('body').read())
+                extracted_data_text = response_body.get('completion')
+
+                if extracted_data_text is None:
+                    raise ValueError("Claude 3 returned an empty completion.")
+
+                extracted_data = model_class.model_validate_json(extracted_data_text)
+                return extracted_data
+
+            except (ValueError, json.JSONDecodeError, ValidationError) as e:
+                retries += 1
+                error_message = str(e)
+                print(f"Attempt {retries} failed for {file_path}: {error_message}")
+                prompt = f"{prompt}\n\nAssistant: {extracted_data_text}\n\nHuman: Invalid response. Error: {error_message}. Correct the JSON and try again. Return ONLY the corrected JSON."
+
+        print(f"Max retries exceeded for {file_path}.")
+        return None
+
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
+        return None
+
+def extract_data_from_preprocessed_files(input_dir, output_dir):
+    """Processes whitepaper chunks, saves extracted data, combines chunks."""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    chunk_data_list = []  # Store Pydantic objects from each chunk
+
+    for filename in os.listdir(input_dir):
+        if filename.startswith('whitepaper_chunk_') and filename.endswith('.json'):
+            file_path = os.path.join(input_dir, filename)
+            extracted_data = process_file_chunk(file_path)
+
+            if extracted_data:
+                chunk_data_list.append(extracted_data) # Append pydantic object.
+                print(f"Extracted data from {filename}") # removed saving here
+
+    # Combine Chunks (Corrected)
+    combined_whitepaper = combine_chunks(chunk_data_list)
+
+    # Save Combined Data
+    if combined_whitepaper:
+        output_file_path = os.path.join(output_dir, "whitepaper.json")
+        with open(output_file_path, 'w') as outfile:
+            json.dump(combined_whitepaper.model_dump(), outfile, indent=4)
+        print(f"Combined data saved to {output_file_path}")
+
+def combine_chunks(chunk_data_list: List[Whitepaper]) -> Optional[Whitepaper]:
+    """Combines a list of Whitepaper Pydantic objects into a single Whitepaper object."""
+    if not chunk_data_list:
+        return None
+
+    combined_data = {}  # Initialize an empty dictionary
+
+    # Iterate through the fields of the Whitepaper model
+    for field_name in Whitepaper.model_fields:
+        combined_data[field_name] = [] if isinstance(getattr(chunk_data_list[0], field_name), list) else None
+
+    # Iterate through each chunk's data
+    for chunk_data in chunk_data_list:
+        for field_name in Whitepaper.model_fields:
+            field_value = getattr(chunk_data, field_name)  # Get the field value from the chunk
+
+            if isinstance(field_value, list):
+                # Extend lists and remove duplicates
+                combined_data[field_name].extend(x for x in field_value if x not in combined_data[field_name])
+            elif field_value is not None:
+                # For non-list fields, keep the latest non-None value
+                combined_data[field_name] = field_value
+
+    # Create a new Whitepaper instance from the combined dictionary
+    return Whitepaper(**combined_data)
+
+# --- Main Execution ---
+if __name__ == '__main__':
+    extract_data_from_preprocessed_files(PREPROCESSED_DIR, EXTRACTED_DIR)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # information_extraction_whitepaper.py
 import json
 import boto3

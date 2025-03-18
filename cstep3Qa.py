@@ -1,3 +1,45 @@
+# Configure logging
+logging.basicConfig(filename="qa_system.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def get_bedrock_embeddings(texts):
+    """
+    Uses Bedrock Embeddings API to generate embeddings for input texts.
+    """
+    return bedrock_embeddings.embed_documents(texts)
+
+def load_knowledge_base(kb_file):
+    """
+    Loads the structured knowledge base JSON file and stores embeddings in ChromaDB.
+    Prevents duplicate entries by checking existing IDs.
+    """
+    try:
+        with open(kb_file, "r", encoding="utf-8") as f:
+            knowledge_base = json.load(f)
+        
+        existing_ids = set(collection.get()['ids'])  # Retrieve existing document IDs from ChromaDB
+        
+        for idx, entry in enumerate(knowledge_base):
+            doc_id = str(idx)
+            if doc_id in existing_ids:
+                logging.info("Skipping duplicate embedding ID: %s", doc_id)
+                continue  # Skip duplicate IDs
+            
+            embedding = get_bedrock_embeddings([json.dumps(entry["insights"])])[0]
+            collection.add(ids=[doc_id], embeddings=[embedding], metadatas=[{"insights": entry["insights"]}])
+        
+        logging.info("Knowledge base loaded successfully with %d new entries.", len(knowledge_base) - len(existing_ids))
+        return knowledge_base
+    except Exception as e:
+        logging.error("Error loading knowledge base: %s", str(e))
+        return []
+
+
+
+
+
+
+
+
 import json
 import boto3
 import numpy as np

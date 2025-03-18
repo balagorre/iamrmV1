@@ -109,7 +109,11 @@ def search_knowledge_base(query, knowledge_base, top_k=5, vector_score_threshold
     # Assign weighted scores: 0.7 weight for vector search, 0.3 weight for BM25
     for idx, doc in enumerate(vector_results):
         vector_weight = 0.7 if vector_results else 0.5
-    bm25_weight = 0.3 if bm25_results else 0.5
+        combined_results[doc] = combined_results.get(doc, 0) + (vector_weight * (top_k - idx))
+        vector_weight = 0.7 if vector_results else 0.5
+    for idx, doc in enumerate(bm25_results):
+        bm25_weight = 0.3 if bm25_results else 0.5
+        combined_results[doc] = combined_results.get(doc, 0) + (bm25_weight * (top_k - idx))
     combined_results[doc] = combined_results.get(doc, 0) + (vector_weight * (top_k - idx))
     for idx, doc in enumerate(bm25_results):
         combined_results[doc] = combined_results.get(doc, 0) + (bm25_weight * (top_k - idx))

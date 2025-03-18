@@ -55,6 +55,33 @@ def expand_query(query):
         logging.error("Error generating query expansion: %s", str(e))
         return [query]
 
+def load_knowledge_base(kb_file):
+    """
+    Loads the structured knowledge base JSON file and stores embeddings in ChromaDB.
+    Prevents duplicate entries by checking existing IDs.
+    """
+    try:
+        with open(kb_file, "r", encoding="utf-8") as f:
+            knowledge_base = json.load(f)
+        
+        existing_ids = set(collection.get()['ids'])  # Retrieve existing document IDs from ChromaDB
+        
+        for idx, entry in enumerate(knowledge_base):
+            doc_id = str(idx)
+            if doc_id in existing_ids:
+                logging.info("Skipping duplicate embedding ID: %s", doc_id)
+                continue  # Skip duplicate IDs
+            
+            embedding = get_bedrock_embeddings([json.dumps(entry["insights"])])
+            if embedding:
+                collection.add(ids=[doc_id], embeddings=[embedding[0]], metadatas=[{"insights": entry["insights"]}])
+        
+        logging.info("Knowledge base loaded successfully with %d new entries.", len(knowledge_base) - len(existing_ids))
+        return knowledge_base
+    except Exception as e:
+        logging.error("Error loading knowledge base: %s", str(e))
+        return []
+
 def search_knowledge_base(query, top_k=5):
     """
     Uses hybrid search (BM25 + Embeddings) with query expansion to retrieve the most relevant insights.
@@ -74,10 +101,71 @@ def search_knowledge_base(query, top_k=5):
         logging.error("Error retrieving from knowledge base: %s", str(e))
         return ["Error retrieving results."]
 
+def generate_response_with_claude3(query, relevant_chunks, max_chunks=3):
+    """
+    Uses Claude 3 to refine the response based on retrieved insights.
+    Formats insights in structured output for better readability.
+    """
+    bedrock = boto3.client(service_name='bedrock-runtime', region_name='us-east-1')
+    
+    structured_context = "\n".join([f"[INSIGHT {i+1}]: {chunk}" for i, chunk in enumerate(relevant_chunks[:max_chunks])])
+    
+    prompt = f"""
+    You are an AI assistant helping answer questions about a model whitepaper. Below are relevant model insights:
+    
+    {structured_context}
+    
+    Based on the above insights, answer the following question:
+    {query}
+    """
+    
+    payload = {"prompt": prompt, "max_tokens": 1000, "temperature": 0.5}
+    
+    try:
+        response = bedrock.invoke_model(
+            body=json.dumps(payload),
+            modelId='anthropic.claude-3-sonnet-2024-02-29',
+            accept='application/json',
+            contentType='application/json'
+        )
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        return response_body.get('completion', "Error: Malformed response received.")
+    except Exception as e:
+        logging.error("Error generating response: %s", str(e))
+        return f"Error generating response: {e}"
+
+def interactive_qa_system(kb_file):
+    """
+    Runs an interactive Q&A session where the user can ask questions about the model.
+    Saves chat history for context-aware follow-up questions and logs interactions.
+    """
+    load_knowledge_base(kb_file)
+    
+    chat_history = []
+    print("\nModel Q&A System: Type 'exit' to quit.")
+    
+    while True:
+        query = input("Ask a question: ")
+        if query.lower() == 'exit':
+            break
+        
+        relevant_chunks = search_knowledge_base(query)
+        response = generate_response_with_claude3(query, relevant_chunks)
+        
+        chat_history.append({"question": query, "answer": response})
+        logging.info("User query: %s | Response: %s", query, response)
+        
+        print("\nAnswer:\n", response)
+        print("-" * 80)
+    
+    with open("chat_history.json", "w", encoding="utf-8") as f:
+        json.dump(chat_history, f, indent=4)
+        
+    logging.info("Chat history saved successfully.")
+
 # Example usage
 kb_file = "extracted_text_knowledge_base.json"
 interactive_qa_system(kb_file)
-
 
 
 

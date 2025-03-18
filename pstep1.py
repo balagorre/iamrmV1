@@ -1,3 +1,83 @@
+def consolidate_results(results):
+    """
+    Consolidates results from all chunks into a single structured output.
+    
+    Args:
+        results (list): List of results from individual chunks.
+
+    Returns:
+        dict: Consolidated results including summaries, inputs/outputs, assumptions, and limitations,
+              along with metadata about processing.
+    """
+    consolidated = {
+        "summary": [],
+        "model_inputs": [],
+        "model_outputs": [],
+        "assumptions": [],
+        "limitations": [],
+        "metadata": {
+            "total_chunks": len(results),
+            "processed_chunks": 0,
+            "failed_chunks": 0,
+            "failed_chunk_ids": []
+        }
+    }
+    
+    for i, result in enumerate(results):
+        # Validate that result is a dictionary
+        if not isinstance(result, dict):
+            logging.warning(f"Skipping invalid result at index {i}: Expected dict, got {type(result).__name__}")
+            consolidated["metadata"]["failed_chunks"] += 1
+            consolidated["metadata"]["failed_chunk_ids"].append(f"Invalid result at index {i}")
+            continue
+        
+        # Check for errors in the result
+        if result.get("error"):
+            logging.warning(f"Skipping failed result: {result['error']}")
+            consolidated["metadata"]["failed_chunks"] += 1
+            if "chunk_id" in result:
+                consolidated["metadata"]["failed_chunk_ids"].append(result["chunk_id"])
+            continue
+        
+        # Track processed chunks
+        consolidated["metadata"]["processed_chunks"] += 1
+        
+        # Consolidate summaries
+        summary = result.get("summary", "").strip()
+        if summary:  # Avoid empty summaries
+            consolidated["summary"].append(summary)
+        
+        # Consolidate model inputs (deduplicate by name)
+        for input_item in result.get("model_inputs", []):
+            if not any(existing_input["name"] == input_item["name"] for existing_input in consolidated["model_inputs"]):
+                consolidated["model_inputs"].append(input_item)
+        
+        # Consolidate model outputs (deduplicate by name)
+        for output_item in result.get("model_outputs", []):
+            if not any(existing_output["name"] == output_item["name"] for existing_output in consolidated["model_outputs"]):
+                consolidated["model_outputs"].append(output_item)
+        
+        # Consolidate assumptions (deduplicate)
+        for assumption in result.get("assumptions", []):
+            if assumption not in consolidated["assumptions"]:
+                consolidated["assumptions"].append(assumption)
+        
+        # Consolidate limitations (deduplicate)
+        for limitation in result.get("limitations", []):
+            if limitation not in consolidated["limitations"]:
+                consolidated["limitations"].append(limitation)
+    
+    return consolidated
+
+
+
+
+
+
+
+
+
+
 import boto3
 
 def upload_pdf_to_s3(local_file_path, bucket_name, s3_folder):

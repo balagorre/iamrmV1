@@ -1,3 +1,112 @@
+import json
+
+def main():
+    # Step 1: Chunk the extracted text
+    with open("./extracted_content/extracted_text.txt", "r", encoding="utf-8") as f:
+        extracted_text = f.read()
+
+    print("Chunking extracted text...")
+    chunks = chunk_text(extracted_text)
+    print(f"Total chunks created: {len(chunks)}")
+
+    # Step 2: Process chunks concurrently
+    print("Processing chunks concurrently...")
+    results = process_chunks_concurrently(chunks)
+    print(f"Processed {len(results)} chunks.")
+
+    # Step 3: Consolidate results across all chunks
+    print("Consolidating results...")
+    final_results = consolidate_results(results)
+
+    # Save consolidated results for inspection/debugging
+    with open("./consolidated_whitepaper_analysis.json", "w", encoding="utf-8") as f:
+        json.dump(final_results, f, indent=2)
+    
+    print("Consolidated whitepaper analysis saved.")
+
+    # Step 4: Clean and summarize consolidated results
+    print("Cleaning and summarizing consolidated results...")
+    cleaned_final_results = clean_and_summarize_final_results(final_results)
+
+    # Save cleaned results for inspection/debugging
+    with open("./cleaned_whitepaper_analysis.json", "w", encoding="utf-8") as f:
+        json.dump(cleaned_final_results, f, indent=2)
+    
+    print("Cleaned whitepaper analysis saved.")
+
+    # Step 5: Export cleaned results to Word document
+    output_file_path = "./cleaned_whitepaper_analysis.docx"
+    export_to_word(cleaned_final_results, output_file_path)
+
+    print(f"Cleaned whitepaper analysis exported to {output_file_path}.")
+
+# Run the workflow
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+
+# Step 3: Consolidate results across all chunks
+final_results = consolidate_results(results)
+
+# Save consolidated results to a JSON file for inspection/debugging
+import json
+with open("./consolidated_whitepaper_analysis.json", "w", encoding="utf-8") as f:
+    json.dump(final_results, f, indent=2)
+
+print("Consolidated whitepaper analysis saved.")
+
+# Step 4: Clean and summarize consolidated results
+cleaned_final_results = clean_and_summarize_final_results(final_results)
+
+# Save cleaned results to a JSON file for inspection/debugging
+with open("./cleaned_whitepaper_analysis.json", "w", encoding="utf-8") as f:
+    json.dump(cleaned_final_results, f, indent=2)
+
+print("Cleaned whitepaper analysis saved.")
+
+
+
+# Step 5: Export cleaned results to Word document
+output_file_path = "./cleaned_whitepaper_analysis.docx"
+export_to_word(cleaned_final_results, output_file_path)
+
+print(f"Cleaned whitepaper analysis exported to {output_file_path}.")
+
+
+
+
+
+
+
+
+
+# Load consolidated results from JSON file (or use your existing results object)
+with open("./consolidated_whitepaper_analysis.json", "r", encoding="utf-8") as f:
+   consolidated_results = json.load(f)
+
+# Clean and summarize results
+cleaned_final_results = clean_and_summarize_final_results(consolidated_results)
+
+# Save cleaned results to Word document
+output_file_path = "./cleaned_whitepaper_analysis.docx"
+export_to_word(cleaned_final_results, output_file_path)
+
+print(f"Cleaned whitepaper analysis saved to {output_file_path}")
+
+
+
+
+
+
+
+
 def summarize_consolidated_summaries(summaries):
     """
     Uses Claude via AWS Bedrock to generate a high-level summary from consolidated summaries.

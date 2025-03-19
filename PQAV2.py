@@ -1,3 +1,11 @@
+# Display follow-up questions
+if result.get("followup_questions"):
+    markdown_response += (
+        "\n### <span style='color:#AF7AC5'>**Follow-up Questions:**</span>\n"
+        f"{result['followup_questions']}\n"
+    )
+
+
 # Complete Function Invocation Flow for Enhanced Q&A System
 
 Below is the comprehensive flow of all function invocations in our enhanced system, showing the exact sequence in which functions are called and how they interact when processing queries.

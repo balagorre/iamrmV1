@@ -142,6 +142,124 @@ Answer from Perplexity: pplx.ai/share
 
 
 
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import logging
+
+def enhanced_technical_search(query_dict, cleaned_results, extracted_text):
+    """
+    Performs an enhanced multi-strategy search for technical content.
+    
+    Args:
+        query_dict (dict): The transformed query with intent, key terms, rephrased query, and related queries.
+        cleaned_results (dict): Cleaned summary document with structured sections.
+        extracted_text (str): Full extracted text of the whitepaper.
+
+    Returns:
+        dict: Combined relevant sections from both sources.
+    """
+    # Extract query components
+    rephrased_query = query_dict.get("rephrased_query", "")
+    key_terms = query_dict.get("key_terms", [])
+    related_queries = query_dict.get("related_queries", [])
+    
+    # Initialize relevant sections
+    relevant_sections = {}
+    
+    # STEP 1: Search in Cleaned Results (Structured Data)
+    logging.info("Searching cleaned results for relevant sections...")
+    
+    # Define technical section keywords
+    section_keywords = {
+        "Calculations": {"calculation", "formula", "algorithm", "compute"},
+        "Model Performance": {"performance", "accuracy", "precision", "recall", "metrics"},
+        "Inputs": {"input", "parameters", "variables", "data"},
+        "Outputs": {"output", "results", "predictions"},
+        "Testing Summary": {"testing", "test", "validate", "verification"},
+        "Solution Specification": {"solution", "specification", "architecture", "design"},
+        "Reconciliation": {"reconciliation", "reconcile", "match"}
+    }
+    
+    # Search for relevant sections in cleaned results
+    for section_name, terms in section_keywords.items():
+        if section_name in cleaned_results:
+            # Check if any key term matches the section keywords
+            if any(term in key_terms for term in terms):
+                logging.info(f"Found relevant section in cleaned results: {section_name}")
+                relevant_sections[section_name] = cleaned_results[section_name]
+    
+    # STEP 2: Semantic Search in Full Extracted Text
+    logging.info("Performing semantic search on full extracted text...")
+    
+    def semantic_search(query, text_chunks, top_k=5):
+        """
+        Performs semantic search using TF-IDF and cosine similarity.
+        
+        Args:
+            query (str): User's query.
+            text_chunks (list): List of text chunks to search through.
+            top_k (int): Number of top results to return.
+
+        Returns:
+            list: Top matching chunks with similarity scores.
+        """
+        vectorizer = TfidfVectorizer(stop_words='english')
+        
+        # Fit and transform text chunks
+        chunk_vectors = vectorizer.fit_transform(text_chunks)
+        
+        # Transform query
+        query_vector = vectorizer.transform([query])
+        
+        # Calculate similarity
+        similarities = cosine_similarity(query_vector, chunk_vectors)[0]
+        
+        # Get top-k results
+        top_indices = similarities.argsort()[-top_k:][::-1]
+        
+        return [(text_chunks[i], similarities[i]) for i in top_indices if similarities[i] > 0.1]
+    
+    # Split extracted text into paragraphs for semantic search
+    paragraphs = [p.strip() for p in extracted_text.split("\n\n") if len(p.strip()) > 50]
+    
+    # Perform semantic search using rephrased query
+    semantic_results = semantic_search(rephrased_query, paragraphs)
+    
+    # Add top results to relevant sections under 'Additional Context'
+    if semantic_results:
+        logging.info(f"Found {len(semantic_results)} relevant paragraphs from semantic search.")
+        
+        additional_context = "\n\n".join([f"Relevance {score:.2f}: {text}" for text, score in semantic_results])
+        relevant_sections["Additional Context"] = additional_context
+    
+    # STEP 3: Expand Search with Related Queries
+    logging.info("Expanding search with related queries...")
+    
+    for related_query in related_queries[:2]:  # Limit to top 2 related queries for efficiency
+        related_results = semantic_search(related_query, paragraphs)
+        
+        if related_results:
+            logging.info(f"Found {len(related_results)} additional paragraphs from related query: {related_query}")
+            
+            additional_related_context = "\n\n".join([f"Relevance {score:.2f}: {text}" for text, score in related_results])
+            
+            if "Additional Context" not in relevant_sections:
+                relevant_sections["Additional Context"] = additional_related_context
+            else:
+                relevant_sections["Additional Context"] += "\n\n" + additional_related_context
+    
+    return relevant_sections
+
+
+
+
+
+
+
+
+
+
+
 
 import boto3
 import json

@@ -1,36 +1,162 @@
 def refine_context_safely(query, raw_context):
-    """Enhanced context management for model validation use cases."""
+    """
+    Enhanced context management for model validation use cases.
+    Prioritizes technical content and preserves precise details critical for validation.
+    
+    Args:
+        query (str): The user's question or validation request
+        raw_context (dict): The raw search results containing sections of content
+        
+    Returns:
+        str: Refined and optimized context with technical precision
+    """
     try:
-        # Increase the limit to support more complex model validation queries
-        # while still staying well below Claude's maximum
-        max_context_chars = 100000  # ~25K tokens, still conservative but more flexible
+        # STEP 1: Determine max safe context size (increased for model validation needs)
+        max_context_chars = 100000  # ~25K tokens, still conservative but more flexible for technical content
         
-        # Prioritize technical sections most relevant to model validation
-        priority_sections = [
-            "Calculations",       # Highest priority for model validation
-            "Model Performance",  # Critical for validation
-            "Inputs",             # Essential for understanding model
-            "Outputs",            # Essential for understanding model
-            "Testing Summary",    # Important for validation methodologies
-            "Solution Specification", # Technical details
-            "Reconciliation",     # Validation processes
-            "Summary",            # General context
-            "Additional Context"  # Supplementary information
-        ]
-        
-        # Rest of implementation as before, with section prioritization updated
-        # ...
-        
-        # Add technical terms detection to ensure relevant context is preserved
+        # STEP 2: Detect technical validation queries
         technical_terms = [
-            "validation", "accuracy", "precision", "recall", "f1", 
-            "error rate", "confidence interval", "statistical", "margin of error",
-            "test set", "training data", "evaluation metrics"
+            "validation", "accuracy", "precision", "recall", "f1", "error rate", 
+            "confidence interval", "statistical", "margin of error", "test set", 
+            "training data", "evaluation metrics", "performance", "calculation",
+            "methodology", "formula", "algorithm", "technical", "specification",
+            "reconciliation", "verification", "audit", "compliance", "testing"
         ]
         
-        if any(term in query.lower() for term in technical_terms):
-            logging.info("Technical validation query detected - preserving technical details")
-            # Modify refinement prompt to emphasize technical accuracy
+        is_technical_query = any(term in query.lower() for term in technical_terms)
+        logging.info(f"Query classified as {'technical validation' if is_technical_query else 'general'} query")
+        
+        # STEP 3: Prepare priority order based on query type
+        if is_technical_query:
+            # Technical validation prioritizes calculations and performance metrics
+            priority_sections = [
+                "Calculations",       # Highest priority for model validation
+                "Model Performance",  # Critical for validation
+                "Inputs",             # Essential for understanding model
+                "Outputs",            # Essential for understanding model
+                "Testing Summary",    # Important for validation methodologies
+                "Solution Specification", # Technical details
+                "Reconciliation",     # Validation processes
+                "Summary",            # General context
+                "Additional Context"  # Supplementary information
+            ]
+            logging.info("Using technical validation section prioritization")
+        else:
+            # General queries use default priority
+            priority_sections = [
+                "Summary",           # High priority - overall understanding
+                "Additional Context", # High priority - search results
+                "Inputs",            # Medium priority
+                "Outputs",           # Medium priority
+                "Calculations",      # Medium priority
+                "Model Performance", # Lower priority
+                "Solution Specification", # Lower priority
+                "Testing Summary",   # Lower priority
+                "Reconciliation"     # Lower priority
+            ]
+            logging.info("Using general query section prioritization")
+        
+        # STEP 4: Format sections in priority order
+        formatted_sections = []
+        current_length = 0
+        added_sections = []
+        skipped_sections = []
+        
+        # Track what was processed
+        logging.info(f"Beginning context construction with {len(raw_context)} available sections")
+        
+        # STEP 5: Add sections in priority order
+        for section_name in priority_sections:
+            if section_name in raw_context:
+                try:
+                    # Extract and format content
+                    content = raw_context[section_name]
+                    section_text = f"== {section_name} ==\n{format_content(content)}"
+                    section_length = len(section_text)
+                    
+                    logging.info(f"Section '{section_name}' has {section_length} characters")
+                    
+                    # Check space with technical prioritization logic
+                    if current_length + section_length > max_context_chars:
+                        # For technical validation, prioritize technical sections even if truncation needed
+                        if is_technical_query and section_name in ["Calculations", "Model Performance", "Testing Summary"]:
+                            # For critical technical sections, include even if we need to truncate
+                            available_space = max_context_chars - current_length - 100  # 100 char buffer
+                            if available_space <= 0:
+                                logging.warning(f"No space left for {section_name}")
+                                skipped_sections.append(section_name)
+                                continue
+                                
+                            truncated_text = section_text[:available_space]
+                            truncated_text += "\n[Note: Some technical content was truncated due to length constraints]"
+                            formatted_sections.append(truncated_text)
+                            added_sections.append(section_name)
+                            current_length += len(truncated_text)
+                            logging.warning(f"Added truncated {section_name}: {len(truncated_text)} chars")
+                        
+                        # For non-technical queries or non-critical sections, handle normally    
+                        elif section_name in ["Summary", "Additional Context"] and section_name not in added_sections:
+                            available_space = max_context_chars - current_length - 100
+                            if available_space <= 0:
+                                logging.warning(f"No space left for {section_name}")
+                                skipped_sections.append(section_name)
+                                continue
+                                
+                            truncated_text = section_text[:available_space]
+                            truncated_text += "\n[Content truncated due to length]"
+                            formatted_sections.append(truncated_text)
+                            added_sections.append(section_name)
+                            current_length += len(truncated_text)
+                            logging.warning(f"Added truncated {section_name}: {len(truncated_text)} chars")
+                        else:
+                            logging.info(f"Skipping {section_name}: would exceed limit")
+                            skipped_sections.append(section_name)
+                    else:
+                        # Section fits, add it normally
+                        formatted_sections.append(section_text)
+                        added_sections.append(section_name)
+                        current_length += section_length
+                        logging.info(f"Added {section_name}: {section_length} chars, total now: {current_length}")
+                except Exception as section_error:
+                    logging.error(f"Error processing section {section_name}: {str(section_error)}")
+                    skipped_sections.append(section_name)
+                    # Continue with other sections
+        
+        # STEP 6: Emergency handling for no sections
+        if not formatted_sections:
+            logging.warning("No sections could fit. Creating minimal context.")
+            first_section_name = next(iter(raw_context.keys())) if raw_context else "No Data"
+            first_content = raw_context[first_section_name] if raw_context else "No content available"
+            
+            # Create minimal context with first section, severely truncated
+            minimal_text = f"== {first_section_name} ==\n"
+            available_space = max_context_chars - len(minimal_text) - 50
+            minimal_text += format_content(first_content)[:available_space]
+            minimal_text += "\n[Severely truncated due to length constraints]"
+            
+            formatted_sections = [minimal_text]
+            added_sections.append(first_section_name)
+        
+        # STEP 7: Join sections to form context
+        context_text = "\n\n".join(formatted_sections)
+        logging.info(f"Final context size: {len(context_text)} characters, included {len(added_sections)} sections")
+        if skipped_sections:
+            logging.info(f"Skipped sections: {', '.join(skipped_sections)}")
+        
+        # STEP 8: Return context without refinement if too large or tiny
+        if len(context_text) > (max_context_chars * 0.8):
+            logging.info("Context too large for refinement step. Returning as is.")
+            return context_text
+        
+        if len(context_text) < 1000:
+            logging.info("Context too small for refinement. Returning as is.")
+            return context_text
+            
+        # STEP 9: Prepare refinement prompt based on query type
+        logging.info("Attempting context refinement...")
+        
+        if is_technical_query:
+            # Technical validation prompt with emphasis on precision and accuracy
             refinement_prompt = f"""
             You are an expert model validator analyzing technical documentation.
             
@@ -47,9 +173,80 @@ def refine_context_safely(query, raw_context):
             5. Preserve all section headings (== Section Name ==)
             
             Technical accuracy is CRITICAL. Never round numbers or simplify technical details.
+            Return only the refined context, maintaining all section markers and exact values.
             """
+        else:
+            # Standard refinement prompt for general queries
+            refinement_prompt = f"""
+            You are an expert information analyst. I have a user question and some context.
+            Please analyze this context and optimize it for answering the question.
             
-            # Rest of refinement implementation...
+            USER QUESTION: {query}
+            
+            CONTEXT:
+            {context_text}
+            
+            Please:
+            1. Remove any irrelevant portions that don't help answer the question
+            2. Reorganize the remaining information in order of relevance to the question
+            3. Preserve all section headings (== Section Name ==) and their structure
+            4. Preserve all relevant data points, numbers, and specific details
+            
+            Return only the refined context, maintaining the section markers and formatting.
+            """
+        
+        # STEP 10: Check if prompt is safe to send
+        if len(refinement_prompt) > max_context_chars:
+            logging.warning("Prompt too large for refinement. Returning original context.")
+            return context_text
+        
+        # STEP 11: Send to Claude with strict timeout and error handling
+        try:
+            response = bedrock_client.invoke_model(
+                modelId="anthropic.claude-3-haiku-20240307-v1:0",
+                body=json.dumps({
+                    "messages": [{"role": "user", "content": refinement_prompt}],
+                    "max_tokens": 4000,
+                    "temperature": 0.2
+                })
+            )
+            
+            response_body = json.loads(response['body'].read().decode('utf-8'))
+            refined_context = response_body["content"].strip()
+            
+            # STEP 12: Validate refinement result
+            if "==" not in refined_context:
+                logging.warning("Refinement removed section markers. Using original context.")
+                return context_text
+                
+            # Additional validation for technical queries
+            if is_technical_query:
+                # Verify key technical terms were preserved
+                original_numbers = re.findall(r'\b\d+\.?\d*\b', context_text)
+                refined_numbers = re.findall(r'\b\d+\.?\d*\b', refined_context)
+                
+                # Check if most important numbers were preserved
+                if len(original_numbers) > 0 and len(refined_numbers) < len(original_numbers) * 0.7:
+                    logging.warning("Refinement lost significant numerical data. Using original context.")
+                    return context_text
+            
+            logging.info(f"Refinement complete. New size: {len(refined_context)} characters")
+            return refined_context
+            
+        except Exception as refine_error:
+            logging.error(f"Error during refinement: {str(refine_error)}")
+            return context_text
+            
+    except Exception as e:
+        logging.error(f"Critical error in context refinement: {str(e)}")
+        # Return a minimal safe context in case of complete failure
+        if raw_context and isinstance(raw_context, dict) and len(raw_context) > 0:
+            # Try to extract at least something from raw_context
+            first_section = next(iter(raw_context.items()))
+            return f"== {first_section[0]} ==\n{format_content(first_section[1])[:5000]}\n\n[Error: Full context processing failed]"
+        else:
+            return "== Error ==\nUnable to process context properly due to technical issues."
+
 
 
 

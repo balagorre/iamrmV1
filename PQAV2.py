@@ -1,144 +1,233 @@
-# Function Flow for Enhanced Model Validation System
+# Complete Function Invocation Flow for Enhanced Q&A System
 
-Below is the complete flow of function invocations in our enhanced system. This shows exactly how functions are called and interact when processing queries.
+Below is the comprehensive flow of all function invocations in our enhanced system, showing the exact sequence in which functions are called and how they interact when processing queries.
 
-## Top-Level Flow
+---
+
+## 1. Main Entry Point
 
 ```
 run_qa_cli()
   │
-  ├── load_sources()  ──> Loads data files
+  ├── initialize_globals() ───> Initialize global variables
+  │   │
+  │   └── load_sources(cleaned_file_path, extracted_file_path) ───> Load whitepaper data
   │
-  ├── setup_bedrock_client()  ──> Connects to AWS
+  ├── setup_bedrock_client() ───> Connect to AWS Bedrock
   │
-  └── process_question(query)  ──> Analyzes and routes query
+  └── process_question(query) ───> Route query to appropriate workflow
       │
-      ├── IF validation query ──> answer_validation_query()
-      │   
-      └── IF general query ──> answer_question()
+      ├── analyze_validation_query(query) ───> Determine query type
+      │
+      ├── IF validation query ───> answer_validation_query(query, cleaned_results, extracted_text)
+      │
+      └── IF general query ───> answer_question(query)
 ```
 
 ---
 
-## General Query Path (Original Flow)
+## 2. Validation Query Path (Complete)
+
+```
+answer_validation_query(query, cleaned_results, extracted_text)
+  │
+  ├── analyze_validation_query(query) ───> Extracts intent, key terms, rephrased query, and related queries
+  │   │
+  │   └── [Claude LLM Call] ───> Analyze query intent
+  │
+  ├── enhanced_technical_search(query_dict, cleaned_results, extracted_text) ───> Retrieves relevant sections
+  │   │
+  │   ├── search_sources(rephrased_query) ───> Search structured data
+  │   │   │
+  │   │   └── section_keywords matching ───> Match query terms to sections
+  │   │
+  │   ├── semantic_search(rephrased_query, paragraphs) ───> Perform vector search
+  │   │   │
+  │   │   ├── TfidfVectorizer() ───> Create vectors
+  │   │   └── cosine_similarity() ───> Calculate relevance
+  │   │
+  │   └── semantic_search(related_queries, paragraphs) ───> Expand search with related queries
+  │
+  ├── refine_context_safely(query, search_results) ───> Refines context for LLM processing
+  │   │
+  │   ├── Prioritize technical sections ───> Order sections by relevance
+  │   │
+  │   ├── Truncate sections to fit token limits ───> Manage context size
+  │   │
+  │   └── [Claude LLM Call] ───> Optimize context for the query
+  │
+  ├── generate_validated_answer(query, refined_context) ───> Generates structured validation answer
+  │   │
+  │   ├── Detect validation aspects ───> Identify validation focus
+  │   │
+  │   ├── Select specialized prompt ───> Choose prompt by validation type
+  │   │
+  │   └── [Claude LLM Call] ───> Generate structured answer
+  │
+  ├── verify_technical_accuracy(query, detailed_answer, refined_context) ───> Verifies technical accuracy
+  │   │
+  │   ├── Extract numerical values and formulas ───> Identify technical elements
+  │   │
+  │   ├── Prepare verification prompt ───> Create prompt for accuracy check
+  │   │
+  │   ├── [Claude LLM Call] ───> Verify answer against context
+  │   │
+  │   └── Parse response body and extract verification result ───> Process LLM output
+  │
+  ├── IF verification has critical issues:
+  │   └── apply_technical_corrections(detailed_answer, verification) ───> Corrects critical issues
+  │       │
+  │       └── Add correction warnings and issue summary ───> Annotate answer with corrections
+  │
+  ├── format_answer_with_citations(corrected_answer, search_results) ───> Adds source citations
+  │   │
+  │   ├── Extract section texts ───> Prepare citation sources
+  │   │
+  │   ├── Truncate context if too large ───> Manage token limits
+  │   │
+  │   └── [Claude LLM Call] ───> Add citations to answer
+  │
+  ├── calculate_technical_confidence(verification) ───> Calculates confidence score
+  │   │
+  │   └── Adjust score based on issue counts ───> Compute final confidence
+  │
+  ├── determine_validation_status(verification) ───> Determines overall validation status
+  │   │
+  │   └── Check critical issue count ───> Assign appropriate status
+  │
+  └── generate_validation_followups(query, corrected_answer) ───> Generates follow-up questions
+      │
+      └── [Claude LLM Call] ───> Generate technical follow-up questions
+```
+
+---
+
+## 3. General Query Path (Complete)
 
 ```
 answer_question(query)
   │
-  ├── analyze_and_transform_query(query)  ──> Returns query_dict
-  │   
-  ├── enhanced_semantic_search(query_dict)  ──> Returns search_results
-  │   
-  ├── refine_context(query, search_results)  ──> Returns refined_context
-  │   
-  ├── generate_chain_of_thought_answer(query, refined_context)  ──> Returns detailed_answer
-  │   
-  ├── evaluate_answer_quality(query, detailed_answer, refined_context)  ──> Returns evaluation
-  │   
-  ├── IF evaluation.score  Returns final_answer
-  │   
-  └── generate_followup_questions(query, final_answer)  ──> Returns followup_questions
-```
-
----
-
-## Model Validation Path (Enhanced Flow)
-
-```
-answer_validation_query(query)
+  ├── analyze_and_transform_query(query) ───> Extracts intent, key terms, rephrased query, and related queries
+  │   │
+  │   └── [Claude LLM Call] ───> Analyze and transform query
   │
-  ├── analyze_and_transform_query(query)  ──> Returns query_dict
-  │   
-  ├── enhanced_semantic_search(query_dict)  ──> Returns search_results
-  │   
-  ├── refine_context_safely(query, search_results)  ──> Returns refined_context
+  ├── enhanced_semantic_search(query_dict) ───> Retrieves relevant sections
   │   │
-  │   ├── Detects if technical validation query
-  │   ├── Prioritizes sections (technical sections first)
-  │   ├── Applies intelligent truncation
-  │   └── Sends to Claude with specialized prompt if under token limit
-  │   
-  ├── generate_validated_answer(query, refined_context)  ──> Returns detailed_answer
+  │   ├── search_sources(rephrased_query) ───> Search structured data
+  │   │   │
+  │   │   └── section_keywords matching ───> Match query terms to sections
   │   │
-  │   ├── Detects specific validation aspects (methodology/performance/calculations)
-  │   ├── Selects specialized prompt based on validation type
-  │   ├── Handles context truncation if needed
-  │   └── Validates response structure and adds missing elements if needed
-  │   
-  ├── verify_technical_accuracy(query, detailed_answer, refined_context)  ──> Returns verification
+  │   ├── search_full_extracted_content(rephrased_query) ───> Search unstructured text
+  │   │   │
+  │   │   └── semantic_search(query, paragraphs) ───> Vector search
+  │   │       │
+  │   │       ├── TfidfVectorizer() ───> Create vectors
+  │   │       └── cosine_similarity() ───> Calculate relevance
   │   │
-  │   ├── Extracts numerical values and formulas
-  │   ├── Determines if simple/complex verification needed
-  │   ├── For complex verification, extracts relevant context
-  │   └── Enhances results with accuracy metadata
-  │   
-  ├── IF verification has critical issues:
-  │     └── apply_technical_corrections(detailed_answer, verification)  ──> Returns corrected_answer
-  │   
-  ├── calculate_technical_confidence(verification)  ──> Returns confidence_score
-  │   
-  ├── determine_validation_status(verification)  ──> Returns validation_status
-  │   
-  └── generate_followup_questions(query, final_answer)  ──> Returns followup_questions
+  │   └── Expand search with related queries ───> Add context from related queries
+  │
+  ├── refine_context(query, search_results) ───> Refines context for LLM processing
+  │   │
+  │   ├── Format context sections ───> Prepare context for LLM
+  │   │
+  │   ├── Check context size ───> Manage token limits
+  │   │
+  │   └── [Claude LLM Call] ───> Optimize context for the query
+  │
+  ├── generate_chain_of_thought_answer(query, refined_context) ───> Generates structured answer
+  │   │
+  │   └── [Claude LLM Call] ───> Generate answer with chain-of-thought reasoning
+  │
+  ├── evaluate_answer_quality(query, detailed_answer, refined_context) ───> Evaluates answer quality
+  │   │
+  │   └── [Claude LLM Call] ───> Evaluate accuracy, completeness, and quality
+  │
+  ├── IF evaluation.score  Improves answer
+  │       │
+  │       └── [Claude LLM Call] ───> Generate improved answer based on evaluation
+  │
+  └── generate_followup_questions(query, final_answer) ───> Generates follow-up questions
+      │
+      └── [Claude LLM Call] ───> Generate general follow-up questions
 ```
 
 ---
 
-## Functions Called By Multiple Workflows
+## 4. Shared Utility Functions
 
-1. **analyze_and_transform_query(query)**
-   - Called by both workflows
-   - Analyzes the query intent and optimizes for search
-   - Returns enhanced query dictionary
+```
+format_content(content)
+  └── Format different content types (lists, dictionaries, strings) for inclusion in prompts
 
-2. **enhanced_semantic_search(query_dict)**
-   - Called by both workflows
-   - Performs semantic search across sources
-   - Returns relevant sections from all sources
-
-3. **generate_followup_questions(query, answer)**
-   - Called by both workflows
-   - Generates relevant follow-up questions
-   - Returns list of follow-up question strings
+semantic_search(query, text_chunks, top_k=5)
+  ├── TfidfVectorizer() ───> Create term frequency-inverse document frequency vectors
+  ├── cosine_similarity() ───> Calculate similarity between vectors
+  └── Return top_k most similar chunks with scores
+```
 
 ---
 
-## Complete Integration
+## 5. Function Invocation Flow in Context Management
 
-The system intelligently switches between workflows:
-
-1. If a user asks "What are the model inputs?", the system:
-   - Detects this as a general query
-   - Uses `answer_question()` workflow
-   - Displays standard confidence and sources
-
-2. If a user asks "Validate the model's performance calculations", the system:
-   - Detects this as a validation query
-   - Uses `answer_validation_query()` workflow
-   - Displays technical confidence, validation status, and verification summary
-
-This creates a seamless experience where users can ask either general questions or specialized validation questions without needing to specify which workflow to use.
+```
+refine_context_safely(query, raw_context)
+  │
+  ├── Detect technical validation query ───> Check for technical terms
+  │
+  ├── Prioritize sections based on query type ───> Order sections by relevance
+  │
+  ├── Format sections in priority order ───> Prepare context
+  │   │
+  │   └── format_content(content) ───> Format different content types
+  │
+  ├── Truncate context to fit token limits ───> Manage size
+  │
+  └── [Claude LLM Call] ───> Optimize context for query
+```
 
 ---
 
-## Example Query Flow: "Validate the model's accuracy metrics"
+## 6. LLM Response Handling Flow
 
-1. User enters: "Validate the model's accuracy metrics"
-2. `process_question()` detects "validate" and "accuracy" → routes to validation path
-3. `answer_validation_query()` is called
-4. Query is analyzed and transformed
-5. Semantic search finds relevant sections including "Model Performance" section
-6. `refine_context_safely()` prioritizes performance metrics information
-7. `generate_validated_answer()` detects "accuracy" aspect → uses performance validation prompt
-8. Answer is generated with structured validation analysis
-9. `verify_technical_accuracy()` checks all numerical values against source context
-10. Any issues are flagged and potentially corrected
-11. Technical confidence and validation status are calculated
-12. Follow-up questions about metrics are generated
-13. Complete result package is returned to user
+```
+[Claude LLM Call]
+  │
+  ├── bedrock_client.invoke_model() ───> Send prompt to AWS Bedrock
+  │
+  ├── Extract response_body ───> Parse API response
+  │
+  ├── Try to parse JSON (if applicable) ───> Process structured output
+  │
+  ├── Validate response structure ───> Check for expected fields
+  │
+  └── Return processed response or handle errors ───> Provide results or fallback
+```
+
+---
+
+This comprehensive flow diagram captures all functions in the enhanced system and their exact sequence of invocation. The system routes queries to either the specialized validation path or the general query path, with each path using specialized functions optimized for its particular use case.
+
+The validation path focuses on technical accuracy, citation, and verification, while the general path focuses on completeness and clarity. Both paths leverage advanced LLM capabilities through prompt engineering and strategic context management.
 
 ---
 Answer from Perplexity: pplx.ai/share
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#################
 
 def verify_technical_accuracy(query, answer, context):
     """

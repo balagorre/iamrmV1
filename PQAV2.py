@@ -141,6 +141,126 @@ This creates a seamless experience where users can ask either general questions 
 Answer from Perplexity: pplx.ai/share
 
 
+def answer_validation_query(user_query, cleaned_results, extracted_text):
+    """
+    Full workflow optimized for model validation queries with enhanced accuracy.
+    
+    Args:
+        user_query (str): The model validator's question.
+        cleaned_results (dict): Cleaned summary document with structured sections.
+        extracted_text (str): Full extracted text of the whitepaper.
+        
+    Returns:
+        dict: Complete response with answer, citations, verification, and confidence.
+    """
+    # Step 1: Query analysis with technical term detection
+    query_dict = analyze_validation_query(user_query)
+    
+    # Step 2: Enhanced semantic search
+    search_results = enhanced_technical_search(query_dict, cleaned_results, extracted_text)
+    
+    if not search_results:
+        return {
+            "answer": "I couldn't find relevant technical information to validate this aspect of the model.",
+            "confidence": 0,
+            "verification_status": "Failed - insufficient information",
+            "technical_accuracy": "Unknown - no source material"
+        }
+    
+    # Step 3: Technical context refinement
+    refined_context = refine_context_safely(user_query, search_results)
+    
+    # Step 4: Technical validation answer generation
+    detailed_answer = generate_validated_answer(user_query, refined_context)
+    
+    # Step 5: Technical accuracy verification
+    verification = verify_technical_accuracy(user_query, detailed_answer, refined_context)
+    
+    # Step 6: Apply corrections if critical issues found
+    if verification.get("critical_issues", []):
+        corrected_answer = apply_technical_corrections(detailed_answer, verification)
+        logging.warning(f"Applied corrections to answer: {len(verification.get('critical_issues', []))} critical issues fixed")
+    else:
+        corrected_answer = detailed_answer
+    
+    # Step 7: Generate validation-specific follow-up questions
+    followup_questions = generate_followup_questions(user_query, corrected_answer)
+    
+    # Create final response package
+    result = {
+        "answer": corrected_answer,
+        "technical_confidence": calculate_technical_confidence(verification),
+        "validation_status": determine_validation_status(verification),
+        "source_sections": list(search_results.keys()),
+        "verification_summary": verification.get("verification_summary", ""),
+        "followup_questions": followup_questions
+    }
+    
+    return result
+
+
+def process_question(user_query):
+    """
+    Process a user question by analyzing it and routing it to the appropriate workflow.
+    
+    Args:
+        user_query (str): The user's question.
+        
+    Returns:
+        dict: Answer and metadata appropriate to the query type.
+    """
+    global cleaned_results, extracted_text
+    
+    # Analyze the query
+    analyzed_query = analyze_validation_query(user_query)
+    
+    # Check if this is a validation-related query
+    validation_terms = ["validate", "validation", "verify", "audit", 
+                        "assumptions", "accuracy", "metrics", 
+                        "performance", "compliance"]
+    
+    is_validation_query = any(term in analyzed_query["key_terms"] for term in validation_terms)
+    
+    if is_validation_query:
+        logging.info(f"Detected validation query: {analyzed_query['intent']}")
+        
+        # Pass cleaned_results and extracted_text to answer_validation_query
+        return answer_validation_query(user_query, cleaned_results, extracted_text)
+    
+    logging.info(f"Processing as general question: {analyzed_query['intent']}")
+    
+    # General queries don't require cleaned_results or extracted_text
+    return answer_question(user_query)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity

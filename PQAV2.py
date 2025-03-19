@@ -140,6 +140,189 @@ This creates a seamless experience where users can ask either general questions 
 ---
 Answer from Perplexity: pplx.ai/share
 
+# Global variables for cleaned results and extracted text
+cleaned_results = None
+extracted_text = None
+
+def load_sources(cleaned_file_path, extracted_file_path):
+    """
+    Loads cleaned summary document and full extracted text.
+    
+    Args:
+        cleaned_file_path (str): Path to the JSON file containing cleaned results.
+        extracted_file_path (str): Path to the file containing full extracted content.
+
+    Returns:
+        tuple: (cleaned_results, extracted_text)
+    """
+    try:
+        with open(cleaned_file_path, "r", encoding="utf-8") as f:
+            cleaned_data = json.load(f)
+            logging.info(f"Loaded cleaned results from {cleaned_file_path}")
+        
+        with open(extracted_file_path, "r", encoding="utf-8") as f:
+            extracted_data = f.read()
+            logging.info(f"Loaded extracted text from {extracted_file_path}")
+        
+        return cleaned_data, extracted_data
+    
+    except Exception as e:
+        logging.error(f"Error loading sources: {str(e)}")
+        return None, None
+
+def initialize_globals():
+    """
+    Initializes global variables for cleaned results and extracted text.
+    
+    Returns:
+        None
+    """
+    global cleaned_results, extracted_text
+    
+    # File paths
+    cleaned_results_path = "./cleaned_whitepaper_analysis.json"
+    extracted_text_path = "./extracted_content/extracted_text.txt"
+    
+    # Load sources
+    cleaned_results, extracted_text = load_sources(cleaned_results_path, extracted_text_path)
+    
+    if not cleaned_results or not extracted_text:
+        logging.error("Failed to load required data files. Please check file paths.")
+        raise ValueError("Initialization failed: Missing required data files.")
+
+def process_question(user_query):
+    """
+    Process a user question by analyzing it and routing it to the appropriate workflow.
+    
+    Args:
+        user_query (str): The user's question.
+        
+    Returns:
+        dict: Answer and metadata appropriate to the query type.
+    """
+    global cleaned_results, extracted_text
+    
+    # Ensure globals are initialized
+    if not cleaned_results or not extracted_text:
+        logging.error("Global variables are not initialized. Call initialize_globals() first.")
+        raise ValueError("Global variables are uninitialized.")
+    
+    # Analyze the query
+    analyzed_query = analyze_validation_query(user_query)
+    
+    # Check if this is a validation-related query
+    validation_terms = ["validate", "validation", "verify", "audit", 
+                        "assumptions", "accuracy", "metrics", 
+                        "performance", "compliance"]
+    
+    is_validation_query = any(term in analyzed_query["key_terms"] for term in validation_terms)
+    
+    if is_validation_query:
+        logging.info(f"Detected validation query: {analyzed_query['intent']}")
+        
+        # Pass cleaned_results and extracted_text to answer_validation_query
+        return answer_validation_query(user_query, cleaned_results, extracted_text)
+    
+    logging.info(f"Processing as general question: {analyzed_query['intent']}")
+    
+    # General queries don't require cleaned_results or extracted_text
+    return answer_question(user_query)
+
+def run_qa_cli():
+    """
+    Run a simple command-line interface for the Q&A system.
+    
+    Returns:
+        None
+    """
+    try:
+        # Initialize global variables
+        initialize_globals()
+        
+        print("\n=== Enhanced Model Validation & Q&A System ===")
+        print("Type 'exit' or 'quit' to end the session.\n")
+        
+        while True:
+            query = input("\nEnter your question: ").strip()
+            
+            if query.lower() in ['exit', 'quit']:
+                print("Exiting Q&A system. Goodbye!")
+                break
+            
+            if not query:
+                print("Please enter a valid question.")
+                continue
+            
+            print("\nProcessing your question...\n")
+            
+            try:
+                # Process the question
+                result = process_question(query)
+                
+                # Display results
+                print("\n=== ANSWER ===")
+                if "technical_confidence" in result:
+                    print(f"Technical Confidence: {result.get('technical_confidence', 0)}/5")
+                    print(f"Validation Status: {result.get('validation_status', 'Unknown')}")
+                else:
+                    print(f"Confidence: {result.get('confidence', 0)}/5")
+                
+                print(result['answer'])
+                
+                # Display sources
+                if "source_sections" in result:
+                    print("\n=== SOURCES ===")
+                    for source in result["source_sections"]:
+                        print(f"- {source}")
+                
+                # Display follow-up questions
+                if result.get("followup_questions"):
+                    print("\n=== FOLLOW-UP QUESTIONS ===")
+                    for i, q in enumerate(result["followup_questions"], 1):
+                        print(f"{i}. {q}")
+                
+                # Display verification summary for validation queries
+                if "verification_summary" in result and result["verification_summary"]:
+                    print("\n=== VERIFICATION SUMMARY ===")
+                    print(result["verification_summary"])
+            
+            except Exception as e:
+                logging.error(f"Error processing question: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+            
+            print("\n" + "-"*60)
+    
+    except ValueError as e:
+        logging.error(str(e))
+        print("Failed to initialize system. Please check log for details.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def answer_validation_query(user_query, cleaned_results, extracted_text):
     """

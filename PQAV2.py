@@ -252,38 +252,298 @@ def refine_context_safely(query, raw_context):
 
 
 def generate_validated_answer(query, context):
-    """Generate answers with enhanced accuracy checks for model validation."""
-    
-    # Standard chain-of-thought prompt plus additional validation instructions
-    prompt = f"""
-    You are an expert model validator providing technical assessment of a financial model.
-    
-    CONTEXT:
-    {context}
-    
-    QUESTION: {query}
-    
-    Please follow this structured analytical process:
-    
-    1. ANALYSIS: Identify exactly what technical aspects need to be validated
-    2. EVIDENCE: Extract precise values, formulas, and methodologies from the context
-    3. VERIFICATION: Check for internal consistency and methodological soundness
-    4. REASONING: Apply validation principles to assess the model's technical merits
-    5. UNCERTAINTY: Explicitly note any areas where information is incomplete
-    6. CONCLUSION: Provide your technical assessment with appropriate confidence levels
-    
-    CRITICAL GUIDELINES:
-    - Cite specific sections, numbers, and formulas with exact precision
-    - Never round numbers or simplify technical details
-    - Explicitly state confidence levels for each technical assertion (High/Medium/Low)
-    - Clearly distinguish between facts from the context and your professional judgment
-    - When information is missing, explicitly state what additional data would be needed
-    
-    Begin with "ANALYSIS:" and conclude with "CONCLUSION:".
     """
+    Generate answers with enhanced accuracy checks specifically for model validation.
+    Emphasizes technical precision, uncertainty quantification, and methodological assessment.
     
-    # Rest of implementation similar to generate_chain_of_thought_answer
-    # but with enhanced error handling and validation...
+    Args:
+        query (str): The user's question or validation request
+        context (str): The refined context containing relevant information
+        
+    Returns:
+        str: A detailed, technically accurate answer with structured reasoning
+    """
+    # STEP 1: Initial setup and logging
+    logging.info(f"Generating validated answer for query: {query[:100]}...")
+    
+    # Detect technical validation aspects
+    validation_aspects = {
+        "methodology": any(term in query.lower() for term in ["methodology", "process", "approach", "procedure"]),
+        "performance": any(term in query.lower() for term in ["performance", "accuracy", "precision", "recall", "metrics"]),
+        "compliance": any(term in query.lower() for term in ["compliance", "regulatory", "requirement", "standard"]),
+        "calculations": any(term in query.lower() for term in ["calculation", "formula", "compute", "algorithm"]),
+        "testing": any(term in query.lower() for term in ["test", "validate", "verification", "evaluation"]),
+        "reconciliation": any(term in query.lower() for term in ["reconcile", "match", "compare", "difference"])
+    }
+    
+    # Log detected aspects
+    detected_aspects = [aspect for aspect, detected in validation_aspects.items() if detected]
+    if detected_aspects:
+        logging.info(f"Detected validation aspects: {', '.join(detected_aspects)}")
+    else:
+        logging.info("No specific validation aspects detected, using general validation approach")
+    
+    # STEP 2: Check context length and truncate if needed
+    max_context_chars = 100000  # ~25K tokens (safe limit for Claude)
+    
+    if len(context) > max_context_chars:
+        logging.warning(f"Context too large for answer generation ({len(context)} chars). Truncating.")
+        # Smarter truncation preserving section headers
+        sections = re.split(r'(==\s.*?\s==)', context)
+        
+        truncated_context = sections[0] if sections[0] != '' else ''  # Start with any text before first header
+        current_length = len(truncated_context)
+        
+        # Add sections until we approach the limit
+        for i in range(1, len(sections) - 1, 2):  # Sections come in pairs (header, content)
+            if i+1 < len(sections):
+                section_header = sections[i]
+                section_content = sections[i+1]
+                section_length = len(section_header) + len(section_content)
+                
+                if current_length + section_length > max_context_chars:
+                    # If this is a critical section, truncate instead of skipping
+                    critical_section = any(term in section_header.lower() for term in 
+                                          ["calculation", "performance", "testing", "input", "output"])
+                    
+                    if critical_section and detected_aspects:
+                        available_space = max_context_chars - current_length - len(section_header) - 100
+                        if available_space > 200:  # Only if reasonable space remains
+                            truncated_section = section_content[:available_space] + "\n[Truncated]"
+                            truncated_context += section_header + truncated_section
+                            current_length += len(section_header) + len(truncated_section)
+                            logging.info(f"Added truncated critical section: {section_header.strip()}")
+                    else:
+                        logging.info(f"Skipping section: {section_header.strip()}")
+                else:
+                    truncated_context += section_header + section_content
+                    current_length += section_length
+                    logging.info(f"Added section: {section_header.strip()}")
+        
+        context = truncated_context
+        context += "\n\n[Note: Some context was truncated due to length constraints]"
+    
+    # STEP 3: Select appropriate prompt based on validation aspects
+    if validation_aspects["methodology"]:
+        # Methodology-focused prompt
+        prompt_template = """
+        You are an expert model validator evaluating a financial model's methodology.
+        
+        CONTEXT:
+        {context}
+        
+        VALIDATION QUESTION: {query}
+        
+        Please assess this methodology with this structured approach:
+        
+        1. ANALYSIS: Identify the specific methodological elements that need validation
+        2. DOCUMENTATION: Extract and evaluate the documented methodology steps
+        3. STANDARDS ASSESSMENT: Assess adherence to industry standards and best practices
+        4. GAP ANALYSIS: Identify any missing or incomplete methodological elements 
+        5. UNCERTAINTY EVALUATION: Assess which aspects have high/medium/low documentation quality
+        6. CONCLUSION: Provide your methodological assessment with clear confidence levels
+        
+        CRITICAL GUIDELINES:
+        - Assign explicit confidence levels (High/Medium/Low) to each methodological assertion
+        - Cite specific sections from the context for methodological details
+        - When methodology details are missing, explicitly state what additional documentation is needed
+        - Distinguish between documented facts and your professional validation judgment
+        - Be precise about methodological strengths and weaknesses
+        
+        Begin with "ANALYSIS:" and conclude with "CONCLUSION:".
+        """
+    elif validation_aspects["performance"]:
+        # Performance-focused prompt
+        prompt_template = """
+        You are an expert model validator evaluating a financial model's performance metrics.
+        
+        CONTEXT:
+        {context}
+        
+        VALIDATION QUESTION: {query}
+        
+        Please assess this model's performance with this structured approach:
+        
+        1. ANALYSIS: Identify the key performance metrics and benchmarks that need evaluation
+        2. METRICS EXTRACTION: Extract all performance metrics with their exact values
+        3. BENCHMARKING: Compare metrics against any stated benchmarks or industry standards
+        4. TESTING ASSESSMENT: Evaluate the testing methodology used to derive these metrics
+        5. STATISTICAL ANALYSIS: Assess statistical significance and confidence intervals
+        6. CONCLUSION: Provide your performance assessment with clear confidence levels
+        
+        CRITICAL GUIDELINES:
+        - Maintain ALL numerical values with their original precision (never round)
+        - Include units of measurement for all metrics
+        - Cite specific sections from the context for each performance claim
+        - Assign a confidence level (High/Medium/Low) to your assessment of each metric
+        - When performance data is missing, explicitly state what additional metrics are needed
+        - Evaluate testing sample sizes and methodological soundness where mentioned
+        
+        Begin with "ANALYSIS:" and conclude with "CONCLUSION:".
+        """
+    elif validation_aspects["calculations"]:
+        # Calculations-focused prompt
+        prompt_template = """
+        You are an expert model validator evaluating a financial model's calculations and algorithms.
+        
+        CONTEXT:
+        {context}
+        
+        VALIDATION QUESTION: {query}
+        
+        Please assess this model's calculations with this structured approach:
+        
+        1. ANALYSIS: Identify the specific calculations and formulas that need validation
+        2. FORMULA EXTRACTION: Extract all relevant formulas and calculations exactly as stated
+        3. VARIABLES ASSESSMENT: Identify all variables used and their definitions
+        4. ALGORITHMIC LOGIC: Evaluate the logical flow and computational steps
+        5. EDGE CASE HANDLING: Assess how the calculations handle boundary conditions
+        6. CONCLUSION: Provide your calculation assessment with clear confidence levels
+        
+        CRITICAL GUIDELINES:
+        - Preserve ALL mathematical formulas exactly as written
+        - Maintain precise notation including subscripts, Greek letters, etc.
+        - Keep ALL numerical values with their exact precision
+        - Cite specific sections from the context for each calculation
+        - Assign a confidence level (High/Medium/Low) to your assessment of each calculation
+        - When calculations are unclear, explicitly identify ambiguities
+        - Distinguish between documented calculations and your inferences
+        
+        Begin with "ANALYSIS:" and conclude with "CONCLUSION:".
+        """
+    else:
+        # General validation prompt
+        prompt_template = """
+        You are an expert model validator providing technical assessment of a financial model.
+        
+        CONTEXT:
+        {context}
+        
+        VALIDATION QUESTION: {query}
+        
+        Please follow this structured analytical process:
+        
+        1. ANALYSIS: Identify exactly what technical aspects need to be validated
+        2. EVIDENCE: Extract precise values, formulas, and methodologies from the context
+        3. VERIFICATION: Check for internal consistency and methodological soundness
+        4. REASONING: Apply validation principles to assess the model's technical merits
+        5. UNCERTAINTY: Explicitly note any areas where information is incomplete
+        6. CONCLUSION: Provide your technical assessment with appropriate confidence levels
+        
+        CRITICAL GUIDELINES:
+        - Cite specific sections, numbers, and formulas with exact precision
+        - Never round numbers or simplify technical details
+        - Explicitly state confidence levels for each technical assertion (High/Medium/Low)
+        - Clearly distinguish between facts from the context and your professional judgment
+        - When information is missing, explicitly state what additional data would be needed
+        
+        Begin with "ANALYSIS:" and conclude with "CONCLUSION:".
+        """
+    
+    # STEP 4: Format prompt
+    prompt = prompt_template.format(query=query, context=context)
+    
+    # STEP 5: Final token limit check
+    # If prompt is still too big for some reason, reduce context further
+    if len(prompt) > max_context_chars:
+        # Recalculate how much context we can include
+        template_size = len(prompt_template.format(query=query, context=""))
+        available_size = max_context_chars - template_size - 100  # 100 char buffer
+        
+        # Truncate context to fit
+        context_truncated = context[:available_size]
+        logging.warning(f"Further truncated context to {len(context_truncated)} chars to fit prompt template")
+        
+        # Regenerate prompt
+        prompt = prompt_template.format(query=query, context=context_truncated)
+    
+    # STEP 6: Call model with enhanced error handling
+    try:
+        logging.info("Sending validation query to Claude...")
+        
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4000,
+                "temperature": 0.3  # Lower temperature for higher precision
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        detailed_answer = response_body["content"].strip()
+        
+        # STEP 7: Validate answer structure
+        expected_sections = ["ANALYSIS", "EVIDENCE", "VERIFICATION", "REASONING", "CONCLUSION"]
+        
+        # Check for at least some of the expected structure
+        has_valid_structure = any(section in detailed_answer for section in expected_sections)
+        
+        if not has_valid_structure:
+            logging.warning("Answer lacks expected validation structure. Adding structural elements.")
+            
+            # Add minimal structure to unstructured response
+            enhanced_answer = f"""
+            ANALYSIS:
+            Based on the validation question: "{query}"
+            
+            {detailed_answer}
+            
+            CONCLUSION:
+            The above represents the available information from the documentation.
+            """
+            return enhanced_answer
+        
+        # STEP 8: Check for confidence levels
+        confidence_terms = ["high confidence", "medium confidence", "low confidence", 
+                           "high certainty", "medium certainty", "low certainty"]
+        
+        has_confidence = any(term in detailed_answer.lower() for term in confidence_terms)
+        
+        if not has_confidence and "CONCLUSION" in detailed_answer:
+            # Split by sections to find conclusion
+            sections = re.split(r'(ANALYSIS:|EVIDENCE:|VERIFICATION:|REASONING:|UNCERTAINTY:|CONCLUSION:)', detailed_answer)
+            conclusion_idx = None
+            
+            for i, section in enumerate(sections):
+                if section == "CONCLUSION:":
+                    conclusion_idx = i
+                    break
+            
+            if conclusion_idx is not None and conclusion_idx + 1 < len(sections):
+                # Add confidence disclaimer to conclusion
+                conclusion = sections[conclusion_idx + 1]
+                enhanced_conclusion = conclusion + "\n\nNOTE: Confidence levels were not explicitly provided in the available documentation. Professional judgment should be exercised when interpreting these results."
+                sections[conclusion_idx + 1] = enhanced_conclusion
+                detailed_answer = "".join(sections)
+                logging.info("Added confidence level disclaimer to conclusion")
+        
+        logging.info("Successfully generated validated answer")
+        return detailed_answer
+        
+    except Exception as e:
+        logging.error(f"Error generating detailed answer: {str(e)}")
+        
+        # STEP 9: Emergency fallback answer
+        fallback_answer = f"""
+        ANALYSIS:
+        I attempted to analyze the validation question: "{query}"
+        
+        TECHNICAL DIFFICULTY:
+        I encountered a technical issue while generating a comprehensive validation response.
+        
+        AVAILABLE INFORMATION:
+        The context contains information about: {", ".join([s for s in context.split("==") if s.strip() and not s.strip().endswith("==")])}
+        
+        LIMITED CONCLUSION:
+        Due to technical limitations, I cannot provide a complete validation assessment at this time. 
+        The raw context should be reviewed manually by a validation expert.
+        
+        CONFIDENCE: Low (due to technical processing limitations)
+        """
+        
+        return fallback_answer
+
 
 
 def verify_technical_accuracy(query, answer, context):

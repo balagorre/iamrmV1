@@ -143,6 +143,79 @@ Answer from Perplexity: pplx.ai/share
 
 
 
+import boto3
+import json
+import logging
+
+def analyze_validation_query(user_query):
+    """
+    Analyzes a user's validation query to extract intent, key terms, and rephrased versions 
+    for optimized semantic search and LLM processing.
+    
+    Args:
+        user_query (str): The original user question or validation request.
+        
+    Returns:
+        dict: A structured dictionary with intent, key terms, rephrased query, and related queries.
+    """
+    bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+    
+    # Prompt for analyzing the query
+    prompt = f"""
+    You are an expert query analyst specializing in model validation tasks. Analyze the following user query:
+
+    USER QUERY: "{user_query}"
+
+    Tasks:
+    1. Identify the **main intent** of this query (e.g., "validate performance metrics", "verify assumptions", "audit calculations").
+    2. Extract **key search terms** that would be most effective for finding relevant information (3-5 terms).
+    3. Generate a **rephrased version** of the query that is optimized for semantic search.
+    4. Create a list of **related questions** that might help expand the search scope.
+
+    Instructions:
+    - Be concise but precise in identifying the intent.
+    - Ensure key terms are specific to model validation (e.g., "accuracy", "precision", "assumptions").
+    - Rephrased queries should be clear and unambiguous.
+    - Related questions should explore complementary or clarifying aspects of the original query.
+
+    Format your response as JSON with these keys:
+    {
+      "intent": "<main_intent>",
+      "key_terms": ["<term_1>", "<term_2>", ...],
+      "rephrased_query": "<optimized_query>",
+      "related_queries": ["<related_question_1>", "<related_question_2>", ...]
+    }
+    
+    Return only valid JSON output."""
+    
+    try:
+        # Invoke Claude via AWS Bedrock
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1500,
+                "temperature": 0.2
+            })
+        )
+        
+        # Parse response
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        analyzed_query = json.loads(response_body["content"])
+        
+        logging.info(f"Query analysis completed successfully: {analyzed_query}")
+        return analyzed_query
+    
+    except Exception as e:
+        logging.error(f"Error analyzing validation query: {str(e)}")
+        
+        # Fallback in case of error
+        return {
+            "intent": user_query,
+            "key_terms": user_query.lower().split(),
+            "rephrased_query": user_query,
+            "related_queries": [user_query]
+        }
 
 
 

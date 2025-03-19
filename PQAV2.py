@@ -141,6 +141,78 @@ This creates a seamless experience where users can ask either general questions 
 Answer from Perplexity: pplx.ai/share
 
 
+
+def generate_validation_followups(query, answer):
+    """
+    Generate relevant follow-up questions based on the user's query and the generated answer.
+    
+    Args:
+        query (str): The original user query.
+        answer (str): The generated answer to the query.
+        
+    Returns:
+        str: A single string containing follow-up questions.
+    """
+    try:
+        # Prompt for generating follow-up questions
+        prompt = f"""
+        You are an expert model validator tasked with generating follow-up questions to help users explore 
+        related aspects of a technical validation task. Analyze the following:
+
+        ORIGINAL QUESTION: "{query}"
+
+        GENERATED ANSWER:
+        {answer}
+
+        Tasks:
+        1. Identify any ambiguities or areas where additional information might be helpful.
+        2. Generate 3-5 follow-up questions that:
+           - Explore related aspects not covered in the original answer.
+           - Dig deeper into specifics mentioned in the answer (e.g., methodologies, assumptions, performance metrics).
+           - Clarify potential ambiguities or explore edge cases.
+
+        Instructions:
+        - Be specific and concise in your questions.
+        - Ensure the questions are relevant to the original query and answer.
+        - Avoid redundant or overly generic questions.
+
+        Format your response as a single string containing all follow-up questions, separated by newlines."""
+        
+        # Call Claude via AWS Bedrock
+        bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+        
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1000,
+                "temperature": 0.7
+            })
+        )
+        
+        # Parse response
+        response_body = response['body'].read().decode('utf-8').strip()
+        
+        # Check if response is empty
+        if not response_body:
+            logging.error("Empty response received from LLM.")
+            raise ValueError("Empty response received from LLM.")
+        
+        logging.info("Follow-up questions generated successfully.")
+        return response_body
+    
+    except Exception as e:
+        logging.error(f"Error generating follow-up questions: {str(e)}")
+        
+        # Fallback: Return a default follow-up question
+        return "What additional information would help validate this model?"
+
+
+
+
+
+
+
 def format_answer_with_citations(answer, raw_context):
     """
     Add precise source citations to answers for auditability, with context size management.

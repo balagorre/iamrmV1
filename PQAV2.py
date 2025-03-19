@@ -1,3 +1,157 @@
+# Function Flow for Enhanced Model Validation System
+
+Below is the complete flow of function invocations in our enhanced system. This shows exactly how functions are called and interact when processing queries.
+
+## Top-Level Flow
+
+```
+run_qa_cli()
+  │
+  ├── load_sources()  ──> Loads data files
+  │
+  ├── setup_bedrock_client()  ──> Connects to AWS
+  │
+  └── process_question(query)  ──> Analyzes and routes query
+      │
+      ├── IF validation query ──> answer_validation_query()
+      │   
+      └── IF general query ──> answer_question()
+```
+
+---
+
+## General Query Path (Original Flow)
+
+```
+answer_question(query)
+  │
+  ├── analyze_and_transform_query(query)  ──> Returns query_dict
+  │   
+  ├── enhanced_semantic_search(query_dict)  ──> Returns search_results
+  │   
+  ├── refine_context(query, search_results)  ──> Returns refined_context
+  │   
+  ├── generate_chain_of_thought_answer(query, refined_context)  ──> Returns detailed_answer
+  │   
+  ├── evaluate_answer_quality(query, detailed_answer, refined_context)  ──> Returns evaluation
+  │   
+  ├── IF evaluation.score  Returns final_answer
+  │   
+  └── generate_followup_questions(query, final_answer)  ──> Returns followup_questions
+```
+
+---
+
+## Model Validation Path (Enhanced Flow)
+
+```
+answer_validation_query(query)
+  │
+  ├── analyze_and_transform_query(query)  ──> Returns query_dict
+  │   
+  ├── enhanced_semantic_search(query_dict)  ──> Returns search_results
+  │   
+  ├── refine_context_safely(query, search_results)  ──> Returns refined_context
+  │   │
+  │   ├── Detects if technical validation query
+  │   ├── Prioritizes sections (technical sections first)
+  │   ├── Applies intelligent truncation
+  │   └── Sends to Claude with specialized prompt if under token limit
+  │   
+  ├── generate_validated_answer(query, refined_context)  ──> Returns detailed_answer
+  │   │
+  │   ├── Detects specific validation aspects (methodology/performance/calculations)
+  │   ├── Selects specialized prompt based on validation type
+  │   ├── Handles context truncation if needed
+  │   └── Validates response structure and adds missing elements if needed
+  │   
+  ├── verify_technical_accuracy(query, detailed_answer, refined_context)  ──> Returns verification
+  │   │
+  │   ├── Extracts numerical values and formulas
+  │   ├── Determines if simple/complex verification needed
+  │   ├── For complex verification, extracts relevant context
+  │   └── Enhances results with accuracy metadata
+  │   
+  ├── IF verification has critical issues:
+  │     └── apply_technical_corrections(detailed_answer, verification)  ──> Returns corrected_answer
+  │   
+  ├── calculate_technical_confidence(verification)  ──> Returns confidence_score
+  │   
+  ├── determine_validation_status(verification)  ──> Returns validation_status
+  │   
+  └── generate_followup_questions(query, final_answer)  ──> Returns followup_questions
+```
+
+---
+
+## Functions Called By Multiple Workflows
+
+1. **analyze_and_transform_query(query)**
+   - Called by both workflows
+   - Analyzes the query intent and optimizes for search
+   - Returns enhanced query dictionary
+
+2. **enhanced_semantic_search(query_dict)**
+   - Called by both workflows
+   - Performs semantic search across sources
+   - Returns relevant sections from all sources
+
+3. **generate_followup_questions(query, answer)**
+   - Called by both workflows
+   - Generates relevant follow-up questions
+   - Returns list of follow-up question strings
+
+---
+
+## Complete Integration
+
+The system intelligently switches between workflows:
+
+1. If a user asks "What are the model inputs?", the system:
+   - Detects this as a general query
+   - Uses `answer_question()` workflow
+   - Displays standard confidence and sources
+
+2. If a user asks "Validate the model's performance calculations", the system:
+   - Detects this as a validation query
+   - Uses `answer_validation_query()` workflow
+   - Displays technical confidence, validation status, and verification summary
+
+This creates a seamless experience where users can ask either general questions or specialized validation questions without needing to specify which workflow to use.
+
+---
+
+## Example Query Flow: "Validate the model's accuracy metrics"
+
+1. User enters: "Validate the model's accuracy metrics"
+2. `process_question()` detects "validate" and "accuracy" → routes to validation path
+3. `answer_validation_query()` is called
+4. Query is analyzed and transformed
+5. Semantic search finds relevant sections including "Model Performance" section
+6. `refine_context_safely()` prioritizes performance metrics information
+7. `generate_validated_answer()` detects "accuracy" aspect → uses performance validation prompt
+8. Answer is generated with structured validation analysis
+9. `verify_technical_accuracy()` checks all numerical values against source context
+10. Any issues are flagged and potentially corrected
+11. Technical confidence and validation status are calculated
+12. Follow-up questions about metrics are generated
+13. Complete result package is returned to user
+
+---
+Answer from Perplexity: pplx.ai/share
+
+
+
+
+
+
+
+
+
+
+
+
+
 def apply_technical_corrections(answer, verification):
     """
     Apply corrections to an answer based on verification results.

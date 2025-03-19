@@ -140,6 +140,136 @@ This creates a seamless experience where users can ask either general questions 
 ---
 Answer from Perplexity: pplx.ai/share
 
+def verify_technical_accuracy(query, answer, context):
+    """
+    Verify the technical accuracy of model validation answers by comparing against source context.
+    
+    Args:
+        query (str): The original user query.
+        answer (str): The generated answer to verify.
+        context (str): The source context used to generate the answer.
+        
+    Returns:
+        dict: Comprehensive verification results with detailed accuracy assessment.
+    """
+    try:
+        # STEP 1: Prepare verification prompt
+        verification_prompt = f"""
+        You are an expert technical reviewer verifying the accuracy of a model validation answer.
+        
+        ORIGINAL QUESTION: {query}
+        
+        ANSWER TO VERIFY:
+        {answer}
+        
+        SOURCE CONTEXT:
+        {context}
+        
+        Perform a thorough technical accuracy review focusing on these aspects:
+        
+        1. NUMERICAL ACCURACY: Verify all numerical values match the source context.
+        2. FORMULA ACCURACY: Verify all formulas and equations match the source.
+        3. METHODOLOGICAL ACCURACY: Verify descriptions of methods/processes are accurate.
+        4. CITATION ACCURACY: Verify references to sections or sources are correct.
+        5. COMPLETENESS: Verify that important context information was not omitted.
+        
+        For each issue found, classify it by severity:
+        - CRITICAL: Factually incorrect numbers, formulas, or methodological claims that would mislead.
+        - IMPORTANT: Significant omissions, unclear explanations, or imprecise descriptions.
+        - MINOR: Style issues, minor imprecisions, or areas that could be clarified.
+        
+        For each issue, provide:
+        - Specific text from the answer that contains the issue.
+        - The correct information from the context.
+        - Clear correction suggestion.
+        
+        Format your response as a JSON object with these keys:
+        {{
+          "verified_accurate": boolean,
+          "issues_found": integer,
+          "critical_issues": [{{"issue": "<description>", "correction": "<suggestion>", "location": "<location>"}}],
+          "important_issues": [{{"issue": "<description>", "correction": "<suggestion>", "location": "<location>"}}],
+          "minor_issues": [{{"issue": "<description>", "correction": "<suggestion>", "location": "<location>"}}],
+          "verification_summary": "<brief_summary>",
+          "suggested_corrections": ["<correction_1>", "<correction_2>", ...]
+        }}
+        
+        Return only valid JSON output."""
+        
+        # STEP 2: Call Claude via AWS Bedrock
+        bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+        
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": verification_prompt}],
+                "max_tokens": 2500,
+                "temperature": 0.2
+            })
+        )
+        
+        # STEP 3: Parse response
+        response_body = response['body'].read().decode('utf-8').strip()
+        
+        if not response_body:
+            logging.error("Empty response received from LLM.")
+            raise ValueError("Empty response received from LLM.")
+        
+        try:
+            verification_result = json.loads(response_body)
+            
+            # Validate structure
+            if not isinstance(verification_result, dict):
+                logging.error("Verification result is not a valid dictionary.")
+                raise ValueError("Invalid verification result format.")
+            
+            # Ensure required keys exist
+            required_keys = ["verified_accurate", "issues_found", "critical_issues", 
+                             "important_issues", "minor_issues", 
+                             "verification_summary", "suggested_corrections"]
+            
+            for key in required_keys:
+                if key not in verification_result:
+                    logging.warning(f"Missing key '{key}' in verification result.")
+                    verification_result[key] = None
+            
+            logging.info(f"Technical accuracy verification completed successfully.")
+            return verification_result
+        
+        except json.JSONDecodeError as e:
+            logging.error(f"Invalid JSON received from LLM: {response_body}")
+            raise ValueError(f"Invalid JSON received from LLM.") from e
+    
+    except Exception as e:
+        logging.error(f"Error during technical accuracy verification: {str(e)}")
+        
+        # Fallback result for error handling
+        return {
+            "verified_accurate": False,
+            "issues_found": 1,
+            "critical_issues": [{"issue": f"Verification failed due to technical error: {str(e)}", 
+                                "correction": "Manual review required", 
+                                "location": "entire document"}],
+            "important_issues": [],
+            "minor_issues": [],
+            "verification_summary": "Technical error during verification prevented detailed analysis.",
+            "suggested_corrections": []
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def generate_validation_followups(query, answer):

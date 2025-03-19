@@ -147,6 +147,7 @@ import boto3
 import json
 import logging
 
+
 def analyze_validation_query(user_query):
     """
     Analyzes a user's validation query to extract intent, key terms, and rephrased versions 
@@ -160,7 +161,7 @@ def analyze_validation_query(user_query):
     """
     bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
     
-    # Prompt for analyzing the query
+    # Corrected prompt with properly formatted JSON example
     prompt = f"""
     You are an expert query analyst specializing in model validation tasks. Analyze the following user query:
 
@@ -179,12 +180,12 @@ def analyze_validation_query(user_query):
     - Related questions should explore complementary or clarifying aspects of the original query.
 
     Format your response as JSON with these keys:
-    {
+    {{
       "intent": "<main_intent>",
       "key_terms": ["<term_1>", "<term_2>", ...],
       "rephrased_query": "<optimized_query>",
       "related_queries": ["<related_question_1>", "<related_question_2>", ...]
-    }
+    }}
     
     Return only valid JSON output."""
     
@@ -216,6 +217,9 @@ def analyze_validation_query(user_query):
             "rephrased_query": user_query,
             "related_queries": [user_query]
         }
+
+
+
 
 
 

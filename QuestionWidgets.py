@@ -163,3 +163,44 @@ interactive_qa()
 
 
 
+
+
+
+
+
+
+def on_submit_button_clicked(b):
+    with output_area:
+        clear_output(wait=True)
+        query = question_input.value.strip()
+        if not query:
+            display(Markdown("<span style='color:#C0392B'>*Please enter a valid question.*</span>"))
+            return
+
+        display(Markdown(f"### <span style='color:#003366'>**Question:**</span>\n> {query}\n\n<span style='color:#17A589'>*Processing...*</span>"))
+
+        # Process with full LLM pipeline
+        result = qa_system.answer_question(query)
+
+        markdown_response = (
+            f"### <span style='color:#154360'>**Answer:**</span>\n"
+            f"<span style='color:#2874A6'>*[Confidence: {result.get('confidence', 0)}/5]*</span>\n\n"
+            f"{result['answer']}\n"
+        )
+
+        # Display sources
+        if result.get("sources"):
+            markdown_response += "\n### <span style='color:#117864'>**Sources:**</span>\n"
+            for source in result["sources"]:
+                markdown_response += f"- {source}\n"
+
+        # Display follow-up questions
+        if result.get("followup_questions"):
+            markdown_response += "\n### <span style='color:#AF7AC5'>**Follow-up Questions:**</span>\n"
+            for i, q in enumerate(result["followup_questions"], 1):
+                markdown_response += f"{i}. {q}\n"
+
+        display(Markdown(markdown_response))
+
+
+

@@ -1,3 +1,14 @@
+
+
+
+
+
+
+
+
+
+
+
 def analyze_whitepaper(embeddings_db):
     """Generate a structured analysis of the whitepaper"""
     key_sections = [
@@ -78,3 +89,77 @@ def interactive_qa():
 
 # Create interactive interface
 interactive_qa()
+
+
+
+
+
+
+
+
+
+import ipywidgets as widgets
+from IPython.display import display, clear_output, Markdown
+import json
+
+output_dir = "./data"
+
+def interactive_qa():
+    # Load embeddings database
+    try:
+        with open(f"{output_dir}/embeddings_db.json", "r") as f:
+            embeddings_db = json.load(f)
+    except Exception as e:
+        display(Markdown(f"**Error:** `{e}`"))
+        return
+
+    # Question input widget
+    question_input = widgets.Text(
+        placeholder='Type your question here...',
+        description='Question:',
+        layout=widgets.Layout(width='80%')
+    )
+
+    # Submit button
+    submit_button = widgets.Button(
+        description='Ask',
+        button_style='success',
+        icon='question-circle'
+    )
+
+    # Function to format and display answer
+    def ask_question(question, embeddings_db):
+        # Replace with actual query logic
+        response = f"Here is a detailed answer related to your question: '{question}'."
+
+        markdown_response = (
+            f"---\n"
+            f"### **Your Question:**\n"
+            f"> {question}\n\n"
+            f"### **Detailed Answer:**\n"
+            f"{response}\n\n"
+            f"---\n"
+        )
+
+        display(Markdown(markdown_response))
+
+    # Handle button click
+    def on_submit_button_clicked(b):
+        with clear_output(wait=True):
+            if question_input.value.strip():
+                ask_question(question_input.value, embeddings_db)
+            else:
+                display(Markdown("*Please enter a valid question before submitting.*"))
+
+    submit_button.on_click(on_submit_button_clicked)
+
+    # Display widgets
+    display(widgets.VBox([
+        widgets.HBox([question_input, submit_button]),
+    ]))
+
+# Run the interactive widget
+interactive_qa()
+
+
+

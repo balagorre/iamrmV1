@@ -1,3 +1,247 @@
+def verify_technical_accuracy(query, answer, context):
+    """
+    Verify the technical accuracy of model validation answers by comparing against source context.
+    
+    Args:
+        query (str): The original user query
+        answer (str): The generated answer to verify
+        context (str): The source context used to generate the answer
+        
+    Returns:
+        dict: Comprehensive verification results with detailed accuracy assessment
+    """
+    # STEP 1: Initial setup and logging
+    logging.info("Beginning technical accuracy verification...")
+    
+    # STEP 2: Extract key components from the answer
+    # Extract numerical values for precise comparison
+    numerical_pattern = r'(-?\d+\.?\d*(?:e[+-]?\d+)?)'
+    answer_numbers = re.findall(numerical_pattern, answer)
+    context_numbers = re.findall(numerical_pattern, context)
+    
+    # Extract formulas for verification (text between $ signs or anything with = sign)
+    formula_pattern = r'\$([^$]+)\$|(\w+\s*=\s*[^.;]+)'
+    answer_formulas = re.findall(formula_pattern, answer)
+    context_formulas = re.findall(formula_pattern, context)
+    
+    # Extract section references
+    section_references = re.findall(r'==\s*([^=]+?)\s*==', context)
+    
+    # Check if answer appears to be citing sections
+    has_citations = any(section in answer for section in section_references)
+    
+    # Log initial assessment
+    logging.info(f"Found {len(answer_numbers)} numerical values and {len(answer_formulas)} formulas in answer")
+    
+    # STEP 3: Determine if verification needs complex or simple approach
+    needs_complex_verification = len(answer) > 1000 or len(answer_numbers) > 5 or len(answer_formulas) > 2
+
+    # For very small or simple answers, use a simplified verification approach
+    if not needs_complex_verification:
+        simple_verification_prompt = f"""
+        You are an expert technical reviewer verifying the accuracy of a model validation answer.
+        
+        ORIGINAL QUESTION: {query}
+        
+        ANSWER TO VERIFY:
+        {answer}
+        
+        SOURCE CONTEXT:
+        {context}
+        
+        Please verify if the answer is technically accurate compared to the source context.
+        
+        Format your response as a JSON object with these keys:
+        "verified_accurate": boolean (true if no critical issues)
+        "issues_found": integer count of issues
+        "critical_issues": array of critical issues
+        "important_issues": array of important issues
+        "minor_issues": array of minor issues
+        "verification_summary": brief summary of your assessment
+        """
+        
+        try:
+            response = bedrock_client.invoke_model(
+                modelId="anthropic.claude-3-haiku-20240307-v1:0",
+                body=json.dumps({
+                    "messages": [{"role": "user", "content": simple_verification_prompt}],
+                    "max_tokens": 1500,
+                    "temperature": 0.2,
+                    "response_format": {"type": "json_object"}
+                })
+            )
+            
+            response_body = json.loads(response['body'].read().decode('utf-8'))
+            verification_result = json.loads(response_body["content"])
+            verification_result["verification_approach"] = "simple"
+            
+            logging.info(f"Completed simple verification: {verification_result['issues_found']} issues found")
+            return verification_result
+            
+        except Exception as e:
+            logging.error(f"Error in simple verification: {str(e)}")
+            return {
+                "verified_accurate": False,
+                "issues_found": 1,
+                "critical_issues": [f"Verification failed due to technical error: {str(e)}"],
+                "important_issues": [],
+                "minor_issues": [],
+                "verification_summary": "Technical error during verification",
+                "verification_approach": "error_fallback"
+            }
+    
+    # STEP 4: Prepare context for complex verification
+    # If context is too large, extract only the most relevant parts to stay within token limits
+    max_context_chars = 80000  # Lower limit for verification to ensure it fits
+    
+    if len(context) > max_context_chars:
+        logging.warning(f"Context too large for verification ({len(context)} chars). Extracting key sections.")
+        
+        # Approach: Extract sections referenced in the answer, plus high-value sections
+        extracted_context = "== Extracted Relevant Sections =="
+        context_sections = re.split(r'(==\s.*?\s==)', context)
+        
+        # Track what we've added and total size
+        added_sections = []
+        current_size = len(extracted_context)
+        
+        # First, extract sections that are explicitly referenced in the answer
+        for i in range(1, len(context_sections) - 1, 2):  # Process section headers
+            if i+1 < len(context_sections):
+                section_header = context_sections[i]
+                section_content = context_sections[i+1]
+                
+                # Check if this section is referenced in the answer
+                section_name = section_header.strip("= \n")
+                if section_name in answer:
+                    section_text = section_header + section_content
+                    # Check if adding would exceed limit
+                    if current_size + len(section_text) < max_context_chars:
+                        extracted_context += "\n\n" + section_text
+                        current_size += len(section_text)
+                        added_sections.append(section_name)
+                        logging.info(f"Added referenced section to verification context: {section_name}")
+        
+        # Next, add critical sections for validation if not already added
+        critical_sections = ["Calculations", "Model Performance", "Testing", "Inputs", "Outputs"]
+        for i in range(1, len(context_sections) - 1, 2):
+            if i+1 < len(context_sections):
+                section_header = context_sections[i]
+                section_content = context_sections[i+1]
+                section_name = section_header.strip("= \n")
+                
+                if any(critical in section_name for critical in critical_sections) and section_name not in added_sections:
+                    section_text = section_header + section_content
+                    # Check if adding would exceed limit
+                    if current_size + len(section_text) < max_context_chars:
+                        extracted_context += "\n\n" + section_text
+                        current_size += len(section_text)
+                        added_sections.append(section_name)
+                        logging.info(f"Added critical section to verification context: {section_name}")
+        
+        # Use the extracted context for verification
+        verification_context = extracted_context
+        logging.info(f"Created verification context with {len(added_sections)} sections, {current_size} chars")
+    else:
+        verification_context = context
+    
+    # STEP 5: Create verification prompt optimized for technical validation
+    verification_prompt = f"""
+    You are an expert technical reviewer verifying the accuracy of a model validation answer.
+    
+    ORIGINAL QUESTION: {query}
+    
+    ANSWER TO VERIFY:
+    {answer}
+    
+    SOURCE CONTEXT:
+    {verification_context}
+    
+    Perform a thorough technical accuracy review focusing on these aspects:
+    
+    1. NUMERICAL ACCURACY: Verify all numerical values match the source context
+    2. FORMULA ACCURACY: Verify all formulas and equations match the source
+    3. METHODOLOGICAL ACCURACY: Verify descriptions of methods/processes are accurate
+    4. CITATION ACCURACY: Verify references to sections or sources are correct
+    5. COMPLETENESS: Verify that important context information was not omitted
+    
+    For each issue found, classify it by severity:
+    - CRITICAL: Factually incorrect numbers, formulas, or methodological claims that would mislead
+    - IMPORTANT: Significant omissions, unclear explanations, or imprecise descriptions
+    - MINOR: Style issues, minor imprecisions, or areas that could be clarified
+    
+    For each issue, provide:
+    - Specific text from the answer that contains the issue
+    - The correct information from the context
+    - Clear correction suggestion
+    
+    Format your response as a JSON object with these keys:
+    "verified_accurate": boolean (true if no critical issues)
+    "issues_found": integer count of issues
+    "critical_issues": array of critical issues, each with "issue", "correction", and "location"
+    "important_issues": array of important issues, each with "issue", "correction", and "location"
+    "minor_issues": array of minor issues, each with "issue", "correction", and "location"
+    "verification_summary": descriptive assessment summarizing your findings
+    "suggested_corrections": specific text suggestions to improve accuracy
+    """
+    
+    # STEP 6: Call the model for verification
+    try:
+        logging.info("Sending verification request to Claude...")
+        
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": verification_prompt}],
+                "max_tokens": 2500,
+                "temperature": 0.2,
+                "response_format": {"type": "json_object"}
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        verification_result = json.loads(response_body["content"])
+        
+        # STEP 7: Enhance results with additional metadata
+        verification_result["verification_approach"] = "comprehensive"
+        
+        # Add supplementary accuracy metrics
+        verification_result["accuracy_metrics"] = {
+            "numerical_values_count": len(answer_numbers),
+            "formulas_count": len(answer_formulas),
+            "has_citations": has_citations,
+            "critical_issue_rate": len(verification_result.get("critical_issues", [])) / max(1, len(answer_numbers) + len(answer_formulas)),
+            "verification_confidence": "high" if len(verification_context) > 10000 else "medium"
+        }
+        
+        # Log verification results
+        critical_count = len(verification_result.get("critical_issues", []))
+        important_count = len(verification_result.get("important_issues", []))
+        minor_count = len(verification_result.get("minor_issues", []))
+        
+        logging.info(f"Verification complete: {critical_count} critical, {important_count} important, {minor_count} minor issues")
+        
+        return verification_result
+        
+    except Exception as e:
+        logging.error(f"Error in technical verification: {str(e)}")
+        
+        # STEP 8: Fallback error handling
+        return {
+            "verified_accurate": False,
+            "issues_found": 1,
+            "critical_issues": [{"issue": f"Verification failed due to technical error: {str(e)}", 
+                                "correction": "Manual verification required", 
+                                "location": "entire document"}],
+            "important_issues": [],
+            "minor_issues": [],
+            "verification_summary": "Technical error during verification process prevented detailed analysis",
+            "verification_approach": "error_fallback"
+        }
+
+
+
+
 def refine_context_safely(query, raw_context):
     """
     Enhanced context management for model validation use cases.

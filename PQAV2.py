@@ -141,6 +141,127 @@ This creates a seamless experience where users can ask either general questions 
 Answer from Perplexity: pplx.ai/share
 
 
+def format_answer_with_citations(answer, raw_context):
+    """
+    Add precise source citations to answers for auditability, with context size management.
+    
+    Args:
+        answer (str): The generated answer to enhance with citations.
+        raw_context (dict): The raw search results containing relevant sections and sources.
+        
+    Returns:
+        str: Enhanced answer with citations added in square brackets.
+    """
+    try:
+        # STEP 1: Extract and prioritize sections
+        prioritized_sections = [
+            "Calculations", "Model Performance", "Testing Summary",
+            "Inputs", "Outputs", "Reconciliation", "Solution Specification"
+        ]
+        
+        # Filter and prioritize sections from raw_context
+        prioritized_context = {section: raw_context[section] for section in prioritized_sections if section in raw_context}
+        
+        # STEP 2: Manage context size
+        max_context_chars = 80000  # ~20K tokens, leaving room for instructions and answer
+        current_length = 0
+        truncated_context = {}
+        
+        for section_name, content in prioritized_context.items():
+            if isinstance(content, list):
+                # Handle lists (e.g., structured data or multiple paragraphs)
+                section_text = "\n".join(content)
+            else:
+                # Handle single string content
+                section_text = content
+            
+            # Check if adding this section would exceed the limit
+            if current_length + len(section_text) > max_context_chars:
+                # Truncate this section to fit within the limit
+                available_space = max_context_chars - current_length - len(section_name) - 50  # Add buffer for formatting
+                truncated_section = section_text[:available_space] + "\n[Truncated due to length]"
+                truncated_context[section_name] = truncated_section
+                current_length += len(truncated_section)
+                break
+            else:
+                # Add full section if it fits
+                truncated_context[section_name] = section_text
+                current_length += len(section_text)
+        
+        logging.info(f"Final context size: {current_length} characters across {len(truncated_context)} sections.")
+        
+        # STEP 3: Prepare citation prompt with truncated context
+        citation_prompt = f"""
+        You are an expert tasked with enhancing a technical answer by adding precise source citations.
+
+        ANSWER:
+        {answer}
+        
+        SOURCE SECTIONS:
+        {json.dumps(truncated_context, indent=2)}
+        
+        Instructions:
+        1. Review the answer and identify technical claims, numbers, or methodologies.
+        2. For each significant claim, add a precise citation in square brackets (e.g., [Calculations], [Model Performance]).
+        3. Citations should reference the source section (e.g., "Calculations", "Model Performance").
+        4. DO NOT change any technical details in the original answer.
+        5. Ensure every numerical value and technical assertion has a citation.
+        
+        Return the enhanced answer with added citations in square brackets."""
+        
+        # STEP 4: Call Claude via AWS Bedrock
+        bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+        
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": citation_prompt}],
+                "max_tokens": 2500,
+                "temperature": 0.2
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        cited_answer = response_body["content"].strip()
+        
+        # STEP 5: Validate output
+        if "[" not in cited_answer or "]" not in cited_answer:
+            logging.warning("Citations were not added to the answer. Returning original answer.")
+            return answer
+        
+        logging.info("Citations successfully added to the answer.")
+        return cited_answer
+    
+    except Exception as e:
+        logging.error(f"Error adding citations: {str(e)}")
+        
+        # Fallback: Return original answer if citation process fails
+        return f"""
+        [NOTE: Failed to add citations due to technical error.]
+        
+        Original Answer:
+        {answer}
+        
+        Error Details:
+        {str(e)}
+        """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def generate_validation_followups(query, answer):
     """

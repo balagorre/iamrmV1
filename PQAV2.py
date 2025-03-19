@@ -140,6 +140,115 @@ This creates a seamless experience where users can ask either general questions 
 ---
 Answer from Perplexity: pplx.ai/share
 
+
+
+def format_answer_with_citations(answer, raw_context):
+    """
+    Add precise source citations to answers for auditability.
+    
+    Args:
+        answer (str): The generated answer to enhance with citations.
+        raw_context (dict): The raw search results containing relevant sections and sources.
+        
+    Returns:
+        str: Enhanced answer with citations added in square brackets.
+    """
+    try:
+        # STEP 1: Extract text from each section for citation purposes
+        section_texts = {}
+        
+        for section_name, content in raw_context.items():
+            if isinstance(content, list):
+                if all(isinstance(item, dict) for item in content):
+                    # Handle structured data (e.g., inputs/outputs)
+                    section_texts[section_name] = [f"{item.get('name', '')}: {item.get('description', '')}" 
+                                                   for item in content]
+                else:
+                    # Handle list of strings
+                    section_texts[section_name] = content
+            else:
+                # Handle single string content
+                section_texts[section_name] = [content]
+        
+        # STEP 2: Prepare citation prompt
+        citation_prompt = f"""
+        You are an expert tasked with enhancing a technical answer by adding precise source citations.
+
+        ANSWER:
+        {answer}
+        
+        SOURCE SECTIONS:
+        {json.dumps(section_texts, indent=2)}
+        
+        Instructions:
+        1. Review the answer and identify technical claims, numbers, or methodologies.
+        2. For each significant claim, add a precise citation in square brackets (e.g., [Calculations], [Model Performance]).
+        3. Citations should reference the source section (e.g., "Calculations", "Model Performance").
+        4. DO NOT change any technical details in the original answer.
+        5. Ensure every numerical value and technical assertion has a citation.
+        
+        Return the enhanced answer with added citations in square brackets."""
+        
+        # STEP 3: Call Claude via AWS Bedrock
+        bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+        
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": citation_prompt}],
+                "max_tokens": 2500,
+                "temperature": 0.2
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        cited_answer = response_body["content"].strip()
+        
+        # STEP 4: Validate output
+        if "[" not in cited_answer or "]" not in cited_answer:
+            logging.warning("Citations were not added to the answer. Returning original answer.")
+            return answer
+        
+        logging.info("Citations successfully added to the answer.")
+        return cited_answer
+    
+    except Exception as e:
+        logging.error(f"Error adding citations: {str(e)}")
+        
+        # Fallback: Return original answer if citation process fails
+        return f"""
+        [NOTE: Failed to add citations due to technical error.]
+        
+        Original Answer:
+        {answer}
+        
+        Error Details:
+        {str(e)}
+        """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Global variables for cleaned results and extracted text
 cleaned_results = None
 extracted_text = None

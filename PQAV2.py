@@ -1,4 +1,213 @@
 def refine_context_safely(query, raw_context):
+    """Enhanced context management for model validation use cases."""
+    try:
+        # Increase the limit to support more complex model validation queries
+        # while still staying well below Claude's maximum
+        max_context_chars = 100000  # ~25K tokens, still conservative but more flexible
+        
+        # Prioritize technical sections most relevant to model validation
+        priority_sections = [
+            "Calculations",       # Highest priority for model validation
+            "Model Performance",  # Critical for validation
+            "Inputs",             # Essential for understanding model
+            "Outputs",            # Essential for understanding model
+            "Testing Summary",    # Important for validation methodologies
+            "Solution Specification", # Technical details
+            "Reconciliation",     # Validation processes
+            "Summary",            # General context
+            "Additional Context"  # Supplementary information
+        ]
+        
+        # Rest of implementation as before, with section prioritization updated
+        # ...
+        
+        # Add technical terms detection to ensure relevant context is preserved
+        technical_terms = [
+            "validation", "accuracy", "precision", "recall", "f1", 
+            "error rate", "confidence interval", "statistical", "margin of error",
+            "test set", "training data", "evaluation metrics"
+        ]
+        
+        if any(term in query.lower() for term in technical_terms):
+            logging.info("Technical validation query detected - preserving technical details")
+            # Modify refinement prompt to emphasize technical accuracy
+            refinement_prompt = f"""
+            You are an expert model validator analyzing technical documentation.
+            
+            USER QUERY: {query}
+            
+            CONTEXT:
+            {context_text}
+            
+            Please optimize this context for answering the technical validation query:
+            1. Preserve ALL numerical values, formulas, metrics, and technical specifications exactly
+            2. Maintain all test results and performance metrics with their precise values
+            3. Keep methodological details intact
+            4. Organize information by relevance to the validation question
+            5. Preserve all section headings (== Section Name ==)
+            
+            Technical accuracy is CRITICAL. Never round numbers or simplify technical details.
+            """
+            
+            # Rest of refinement implementation...
+
+
+
+
+def generate_validated_answer(query, context):
+    """Generate answers with enhanced accuracy checks for model validation."""
+    
+    # Standard chain-of-thought prompt plus additional validation instructions
+    prompt = f"""
+    You are an expert model validator providing technical assessment of a financial model.
+    
+    CONTEXT:
+    {context}
+    
+    QUESTION: {query}
+    
+    Please follow this structured analytical process:
+    
+    1. ANALYSIS: Identify exactly what technical aspects need to be validated
+    2. EVIDENCE: Extract precise values, formulas, and methodologies from the context
+    3. VERIFICATION: Check for internal consistency and methodological soundness
+    4. REASONING: Apply validation principles to assess the model's technical merits
+    5. UNCERTAINTY: Explicitly note any areas where information is incomplete
+    6. CONCLUSION: Provide your technical assessment with appropriate confidence levels
+    
+    CRITICAL GUIDELINES:
+    - Cite specific sections, numbers, and formulas with exact precision
+    - Never round numbers or simplify technical details
+    - Explicitly state confidence levels for each technical assertion (High/Medium/Low)
+    - Clearly distinguish between facts from the context and your professional judgment
+    - When information is missing, explicitly state what additional data would be needed
+    
+    Begin with "ANALYSIS:" and conclude with "CONCLUSION:".
+    """
+    
+    # Rest of implementation similar to generate_chain_of_thought_answer
+    # but with enhanced error handling and validation...
+
+
+def verify_technical_accuracy(query, answer, context):
+    """Verify the technical accuracy of model validation answers."""
+    verification_prompt = f"""
+    You are an expert technical reviewer verifying the accuracy of a model validation answer.
+    
+    ORIGINAL QUESTION: {query}
+    
+    ANSWER TO VERIFY:
+    {answer}
+    
+    SOURCE CONTEXT:
+    {context}
+    
+    Perform a thorough technical accuracy review:
+    
+    1. Check all numerical values against the source context
+    2. Verify that formulas and methodologies are correctly described
+    3. Confirm that technical terminology is used appropriately
+    4. Ensure that limitations and assumptions are properly stated
+    5. Verify that confidence levels are appropriate given the evidence
+    
+    For each issue found, provide:
+    - The specific inaccuracy
+    - The correct information from the context
+    - The severity (Critical/Important/Minor)
+    
+    Format your response as a JSON object with these keys:
+    "verified_accurate": boolean (true if no critical issues)
+    "issues_found": integer count of issues
+    "critical_issues": array of critical issues
+    "important_issues": array of important issues
+    "minor_issues": array of minor issues
+    "suggested_corrections": specific corrections for each issue
+    """
+    
+    # Implement accuracy verification with Claude call
+    # ...
+
+def answer_validation_query(user_query):
+    """
+    Full workflow optimized for model validation queries with enhanced accuracy.
+    
+    Args:
+        user_query (str): The model validator's question
+        
+    Returns:
+        dict: Complete response with answer, citations, verification, and confidence
+    """
+    # Step 1: Query analysis with technical term detection
+    query_dict = analyze_validation_query(user_query)  # Enhanced version
+    
+    # Step 2: Enhanced semantic search with technical focus
+    search_results = enhanced_technical_search(query_dict)  # Enhanced version
+    
+    if not search_results:
+        return {
+            "answer": "I couldn't find relevant technical information to validate this aspect of the model.",
+            "confidence": 0,
+            "verification_status": "Failed - insufficient information",
+            "technical_accuracy": "Unknown - no source material"
+        }
+    
+    # Step 3: Technical context refinement
+    refined_context = refine_context_safely(user_query, search_results)
+    
+    # Step 4: Technical validation answer generation
+    detailed_answer = generate_validated_answer(user_query, refined_context)
+    
+    # Step 5: Add precise source citations
+    cited_answer = format_answer_with_citations(detailed_answer, search_results)
+    
+    # Step 6: Technical accuracy verification
+    verification = verify_technical_accuracy(user_query, cited_answer, refined_context)
+    
+    # Step 7: Correct critical issues if any found
+    if verification.get("critical_issues"):
+        corrected_answer = apply_technical_corrections(cited_answer, verification)
+    else:
+        corrected_answer = cited_answer
+    
+    # Step 8: Generate validation-specific follow-up questions
+    followup_questions = generate_validation_followups(user_query, corrected_answer)
+    
+    # Create final response package
+    result = {
+        "answer": corrected_answer,
+        "technical_confidence": calculate_technical_confidence(verification),
+        "validation_status": determine_validation_status(verification),
+        "source_sections": list(search_results.keys()),
+        "verification_summary": verification.get("verification_summary", ""),
+        "followup_questions": followup_questions
+    }
+    
+    return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def refine_context_safely(query, raw_context):
     """
     A more robust implementation of context refinement that breaks the process
     into small steps with explicit error handling.

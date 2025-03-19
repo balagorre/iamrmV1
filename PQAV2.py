@@ -1,3 +1,145 @@
+def refine_context_safely(query, raw_context):
+    """
+    A more robust implementation of context refinement that breaks the process
+    into small steps with explicit error handling.
+    
+    Args:
+        query (str): The user's question
+        raw_context (dict): The raw search results
+        
+    Returns:
+        str: Refined and optimized context
+    """
+    try:
+        # STEP 1: Determine max safe context size
+        max_context_chars = 48000  # Ultra-conservative limit (approx 12K tokens)
+        
+        # STEP 2: Prepare priority order
+        priority_sections = [
+            "Summary", "Additional Context", "Inputs", "Outputs", 
+            "Calculations", "Model Performance", "Solution Specification", 
+            "Testing Summary", "Reconciliation"
+        ]
+        
+        # STEP 3: Format sections in priority order
+        formatted_sections = []
+        current_length = 0
+        added_sections = []
+        
+        logging.info(f"Beginning context construction with {len(raw_context)} available sections")
+        
+        # STEP 4: Add sections in priority order
+        for section_name in priority_sections:
+            if section_name in raw_context:
+                try:
+                    # Extract and format content
+                    content = raw_context[section_name]
+                    section_text = f"== {section_name} ==\n{format_content(content)}"
+                    section_length = len(section_text)
+                    
+                    logging.info(f"Section '{section_name}' has {section_length} characters")
+                    
+                    # Check space
+                    if current_length + section_length > max_context_chars:
+                        # Handle high-priority sections differently
+                        if section_name in ["Summary", "Additional Context"] and section_name not in added_sections:
+                            available_space = max_context_chars - current_length - 100
+                            if available_space <= 0:
+                                logging.warning(f"No space left for {section_name}")
+                                continue
+                                
+                            truncated_text = section_text[:available_space] + "\n[Truncated]"
+                            formatted_sections.append(truncated_text)
+                            added_sections.append(section_name)
+                            current_length += len(truncated_text)
+                            logging.warning(f"Added truncated {section_name}: {len(truncated_text)} chars")
+                        else:
+                            logging.info(f"Skipping {section_name}: would exceed limit")
+                    else:
+                        # Section fits, add it
+                        formatted_sections.append(section_text)
+                        added_sections.append(section_name)
+                        current_length += section_length
+                        logging.info(f"Added {section_name}: {section_length} chars, total now: {current_length}")
+                except Exception as section_error:
+                    logging.error(f"Error processing section {section_name}: {str(section_error)}")
+                    # Continue with other sections
+        
+        # STEP 5: Emergency handling for no sections
+        if not formatted_sections:
+            logging.warning("No sections could fit. Creating minimal context.")
+            formatted_sections = ["== Minimal Context ==\nNo complete sections could fit within limits."]
+        
+        # STEP 6: Join sections to form context
+        context_text = "\n\n".join(formatted_sections)
+        logging.info(f"Final context size: {len(context_text)} characters")
+        
+        # STEP 7: Return context without refinement if too large
+        if len(context_text) > (max_context_chars * 0.8):
+            logging.info("Context too large for refinement step. Returning as is.")
+            return context_text
+        
+        # STEP 8: Skip refinement for very small contexts
+        if len(context_text) < 1000:
+            logging.info("Context too small for refinement. Returning as is.")
+            return context_text
+            
+        # STEP 9: Try to refine context
+        logging.info("Attempting context refinement...")
+        prompt = f"""
+        You are an expert analyst. Optimize this context for answering: "{query}"
+        
+        CONTEXT:
+        {context_text}
+        
+        Instructions:
+        1. Remove irrelevant information
+        2. Preserve section headings (== Section Name ==)
+        3. Focus on information most relevant to the question
+        """
+        
+        # STEP 10: Check if prompt is safe to send
+        if len(prompt) > max_context_chars:
+            logging.warning("Prompt too large for refinement. Returning original context.")
+            return context_text
+        
+        # STEP 11: Send to Claude with strict timeout
+        try:
+            response = bedrock_client.invoke_model(
+                modelId="anthropic.claude-3-haiku-20240307-v1:0",
+                body=json.dumps({
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 4000,
+                    "temperature": 0.2
+                })
+            )
+            
+            response_body = json.loads(response['body'].read().decode('utf-8'))
+            refined_context = response_body["content"].strip()
+            
+            # STEP 12: Validate refinement result
+            if "==" not in refined_context:
+                logging.warning("Refinement removed section markers. Using original context.")
+                return context_text
+                
+            logging.info(f"Refinement complete. New size: {len(refined_context)} characters")
+            return refined_context
+            
+        except Exception as refine_error:
+            logging.error(f"Error during refinement: {str(refine_error)}")
+            return context_text
+            
+    except Exception as e:
+        logging.error(f"Critical error in context refinement: {str(e)}")
+        # Return a minimal safe context in case of complete failure
+        return "== Error ==\nUnable to process context properly due to technical issues."
+
+
+
+
+
+
+
 import os
 import json
 import logging

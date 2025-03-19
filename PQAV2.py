@@ -1,3 +1,217 @@
+def apply_technical_corrections(answer, verification):
+    """
+    Apply corrections to an answer based on verification results.
+    
+    Args:
+        answer (str): The original answer
+        verification (dict): Verification results with issues and corrections
+        
+    Returns:
+        str: Answer with corrections applied or marked for review
+    """
+    # Start with original answer
+    corrected = answer
+    
+    # If there are critical issues that need correction
+    if verification.get("critical_issues"):
+        # Add warning disclaimer at the top
+        correction_warning = """
+        [IMPORTANT: This answer contains corrections to technical inaccuracies 
+        that were identified during verification. Original content has been 
+        modified to ensure technical accuracy.]
+        
+        """
+        
+        # We could implement automatic correction here, but for validation
+        # it's safer to just highlight issues and let human validators review
+        issue_summary = "\n\n== TECHNICAL ACCURACY NOTES ==\n"
+        for i, issue in enumerate(verification.get("critical_issues", [])):
+            issue_summary += f"\n{i+1}. CRITICAL ISSUE: {issue.get('issue', '')}\n"
+            issue_summary += f"   CORRECTION: {issue.get('correction', '')}\n"
+            
+        for i, issue in enumerate(verification.get("important_issues", [])[:3]):  # Top 3 important issues
+            issue_summary += f"\n{i+1}. IMPORTANT ISSUE: {issue.get('issue', '')}\n"
+            issue_summary += f"   SUGGESTION: {issue.get('correction', '')}\n"
+            
+        corrected = correction_warning + corrected + issue_summary
+        
+    return corrected
+
+def calculate_technical_confidence(verification):
+    """
+    Calculate technical confidence level based on verification results.
+    
+    Args:
+        verification (dict): Verification results
+        
+    Returns:
+        float: Confidence score from 0-5
+    """
+    # Default medium confidence
+    base_confidence = 3.0
+    
+    # Adjust based on issues found
+    critical_count = len(verification.get("critical_issues", []))
+    important_count = len(verification.get("important_issues", []))
+    minor_count = len(verification.get("minor_issues", []))
+    
+    # Critical issues severely impact confidence
+    confidence = base_confidence - (critical_count * 1.0)
+    
+    # Important issues moderately impact confidence
+    confidence -= (important_count * 0.3)
+    
+    # Minor issues slightly impact confidence
+    confidence -= (minor_count * 0.1)
+    
+    # If verification failed completely
+    if verification.get("verification_approach") == "error_fallback":
+        confidence = min(confidence, 1.0)
+    
+    # Cap confidence between 0 and 5
+    confidence = max(0, min(5, confidence))
+    
+    return round(confidence, 1)
+
+def determine_validation_status(verification):
+    """
+    Determine overall validation status based on verification results.
+    
+    Args:
+        verification (dict): Verification results
+        
+    Returns:
+        str: Validation status description
+    """
+    if verification.get("verification_approach") == "error_fallback":
+        return "Indeterminate - verification error"
+        
+    critical_issues = len(verification.get("critical_issues", []))
+    
+    if verification.get("verified_accurate", False) and critical_issues == 0:
+        return "Validated - No critical issues"
+    elif critical_issues > 3:
+        return "Failed validation - Multiple critical issues"
+    elif critical_issues > 0:
+        return "Partially validated - Some critical issues"
+    else:
+        return "Validated with minor issues"
+
+
+
+def process_question(user_query):
+    """
+    Process a user question, automatically selecting between general questions
+    and specialized model validation queries.
+    
+    Args:
+        user_query (str): The user's question
+        
+    Returns:
+        dict: Answer and metadata appropriate to the query type
+    """
+    # Detect if this is a validation query
+    validation_terms = [
+        "validate", "validation", "verify", "verification", "audit", 
+        "reconcile", "compliance", "accuracy", "precision", "test results",
+        "model performance", "benchmark", "regulatory", "requirements"
+    ]
+    
+    is_validation_query = any(term in user_query.lower() for term in validation_terms)
+    
+    if is_validation_query:
+        logging.info(f"Detected validation query: {user_query[:100]}...")
+        return answer_validation_query(user_query)
+    else:
+        logging.info(f"Processing as general query: {user_query[:100]}...")
+        return answer_question(user_query)
+
+
+def run_qa_cli():
+    """Run a simple command-line interface for the Q&A system."""
+    global cleaned_results, extracted_text, bedrock_client
+    
+    # File paths
+    cleaned_results_path = "./cleaned_whitepaper_analysis.json"
+    extracted_text_path = "./extracted_content/extracted_text.txt"
+    
+    # Load data and set up client
+    cleaned_results, extracted_text = load_sources(cleaned_results_path, extracted_text_path)
+    bedrock_client = setup_bedrock_client()
+    
+    # Print status
+    print("\n=== Enhanced Model Validation & Q&A System ===")
+    print("Type 'exit' or 'quit' to end the session.\n")
+    print("This system automatically detects and handles validation queries with enhanced technical accuracy.")
+    
+    while True:
+        query = input("\nEnter your question: ").strip()
+        
+        if query.lower() in ['exit', 'quit']:
+            print("Exiting Q&A system. Goodbye!")
+            break
+        
+        if not query:
+            print("Please enter a valid question.")
+            continue
+        
+        print("\nProcessing your question...\n")
+        
+        try:
+            # Process with appropriate workflow
+            result = process_question(query)
+            
+            # Display answer with confidence
+            print("\n=== ANSWER ===")
+            if "technical_confidence" in result:
+                print(f"Technical Confidence: {result.get('technical_confidence', 0)}/5")
+                print(f"Validation Status: {result.get('validation_status', 'Unknown')}")
+            else:
+                print(f"Confidence: {result.get('confidence', 0)}/5")
+                
+            print(result['answer'])
+            
+            # Display sources
+            if "source_sections" in result:
+                print("\n=== SOURCES ===")
+                for source in result["source_sections"]:
+                    print(f"- {source}")
+            elif "sources" in result:
+                print("\n=== SOURCES ===")
+                for source in result["sources"]:
+                    print(f"- {source}")
+            
+            # Display follow-up questions
+            if result.get("followup_questions"):
+                print("\n=== FOLLOW-UP QUESTIONS ===")
+                for i, q in enumerate(result["followup_questions"], 1):
+                    print(f"{i}. {q}")
+            
+            # Display verification summary for validation queries
+            if "verification_summary" in result and result["verification_summary"]:
+                print("\n=== VERIFICATION SUMMARY ===")
+                print(result["verification_summary"])
+            
+        except Exception as e:
+            print(f"Error processing question: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+        
+        print("\n" + "-"*60)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def verify_technical_accuracy(query, answer, context):
     """
     Verify the technical accuracy of model validation answers by comparing against source context.

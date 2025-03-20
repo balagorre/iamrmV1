@@ -56,82 +56,106 @@ Implementation Code
 Here’s how we can implement this system:
 
 
-
-
-import concurrent.futures
+##################################################
+import boto3
+import json
 import logging
 import time
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from docx import Document
 
-def main():
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def smart_chunk_text(text, chunk_size=8000, overlap=500):
     """
-    Main workflow for analyzing a whitepaper and extracting key highlights with parallel processing.
+    Split text into chunks more intelligently, respecting paragraph boundaries.
     
+    Args:
+        text (str): Full text to chunk.
+        chunk_size (int): Target chunk size in characters.
+        overlap (int): Overlap between chunks.
+        
     Returns:
-        None
+        list: List of text chunks.
     """
-    # Configure logging
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    # Split text by paragraphs (or double newline)
+    paragraphs = text.split("\n\n")
     
-    # Load extracted text from file
-    extracted_text_path = "./extracted_content/extracted_text.txt"
+    chunks = []
+    current_chunk = []
+    current_size = 0
     
-    try:
-        with open(extracted_text_path, "r", encoding="utf-8") as f:
-            extracted_text = f.read()
-        
-        logging.info(f"Loaded extracted text from {extracted_text_path}")
-        
-        # Step 1: Chunk the text
-        logging.info("Chunking extracted text...")
-        chunks = chunk_text(extracted_text)
-        logging.info(f"Created {len(chunks)} chunks")
-        
-        # Step 2: Analyze each chunk using LLM in parallel
-        logging.info("Analyzing chunks in parallel...")
-        start_time = time.time()
-        
-        # Use ThreadPoolExecutor for parallel processing
-        results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            # Submit all tasks and map them to their chunk indices
-            future_to_chunk = {executor.submit(analyze_chunk_for_highlights, chunk): i 
-                             for i, chunk in enumerate(chunks)}
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:  # Skip empty paragraphs
+            continue
             
-            # Process results as they complete
-            for future in concurrent.futures.as_completed(future_to_chunk):
-                chunk_idx = future_to_chunk[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    logging.info(f"Processed chunk {chunk_idx+1}/{len(chunks)}")
-                except Exception as e:
-                    logging.error(f"Chunk {chunk_idx+1} generated an exception: {str(e)}")
+        paragraph_size = len(paragraph)
         
-        end_time = time.time()
-        logging.info(f"All chunks processed in {end_time - start_time:.2f} seconds")
+        # If adding this paragraph would exceed chunk size and we already have content,
+        # finish current chunk and start a new one
+        if current_size + paragraph_size > chunk_size and current_chunk:
+            chunks.append("\n\n".join(current_chunk))
+            
+            # Include some overlap from previous chunk
+            overlap_size = 0
+            overlap_paragraphs = []
+            
+            # Start from the end and work backwards to add paragraphs for overlap
+            for p in reversed(current_chunk):
+                if overlap_size + len(p) <= overlap:
+                    overlap_paragraphs.insert(0, p)
+                    overlap_size += len(p)
+                else:
+                    break
+                    
+            current_chunk = overlap_paragraphs
+            current_size = overlap_size
         
-        # Step 3: Consolidate results across all chunks
-        logging.info("Consolidating results...")
-        consolidated_results = consolidate_highlights(results)
-        
-        # Step 4: Export results to Word document
-        output_file_path = "./whitepaper_highlights.docx"
-        logging.info(f"Exporting highlights to Word document at {output_file_path}...")
-        export_to_word_highlights(consolidated_results, output_file_path)
-        
-        print(f"Highlights exported successfully to {output_file_path}")
+        # Add the paragraph to the current chunk
+        current_chunk.append(paragraph)
+        current_size += paragraph_size
     
-    except Exception as e:
-        logging.error(f"Error during whitepaper analysis workflow: {str(e)}")
+    # Add the last chunk if it's not empty
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+    
+    return chunks
 
+def validate_json_structure(json_obj):
+    """
+    Validates that the JSON structure matches the expected format for whitepaper analysis.
+    
+    Args:
+        json_obj: Parsed JSON object to validate
+        
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    expected_keys = ["highlights", "summary", "methodologies", "assumptions", "figures_tables"]
+    
+    # Check if all expected keys exist
+    for key in expected_keys:
+        if key not in json_obj:
+            return False, f"Missing key: {key}"
+        
+        # Check if the value is a list
+        if not isinstance(json_obj[key], list):
+            return False, f"Value for '{key}' is not a list"
+    
+    return True, "Valid JSON structure"
 
-
-def analyze_chunk_for_highlights(chunk):
+def analyze_chunk_for_highlights(chunk, retry_count=0, max_retries=2):
     """
     Analyzes a single chunk of text using Claude via AWS Bedrock to extract key highlights.
+    Implements retry logic and JSON validation.
     
     Args:
         chunk (str): A chunk of text to analyze.
+        retry_count (int): Current retry attempt.
+        max_retries (int): Maximum number of retry attempts.
 
     Returns:
         dict: Extracted highlights and structured analysis.
@@ -139,91 +163,86 @@ def analyze_chunk_for_highlights(chunk):
     bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
     
     prompt = f"""
-    You are a world-class financial analyst and technical documentation expert tasked with extracting 
-    high-value information from a financial model whitepaper section.
+    You are an expert financial model analyst tasked with extracting structured information from a whitepaper section.
+    Your job is to analyze the content and output a strictly formatted JSON object.
 
-    ===== CONTENT TO ANALYZE =====
+    ===== TEXT TO ANALYZE =====
     {chunk}
-    =============================
+    ===========================
 
-    ## ANALYSIS STEPS
-    [Your detailed analysis steps here...]
+    INSTRUCTIONS:
+    1. Carefully read and understand the content.
+    2. Extract information into these EXACT categories:
+       a. HIGHLIGHTS: Key findings or conclusions (3-7 items)
+       b. SUMMARY: Main points in bullet format (5-10 items)
+       c. METHODOLOGIES: Technical approaches mentioned (algorithms, techniques)
+       d. ASSUMPTIONS: Stated or implied assumptions about data or models
+       e. FIGURES_TABLES: References to figures or tables with descriptions
 
-    ## RESPONSE FORMAT GUIDELINES
-    Format your response as a comprehensive JSON object. Here is the expected structure:
+    CRITICAL FORMATTING REQUIREMENTS:
+    - Your output MUST be valid JSON with no extra text before or after
+    - Each value must be a simple string (no nested objects or dictionaries)
+    - Use ONLY these exact keys: "highlights", "summary", "methodologies", "assumptions", "figures_tables"
+    - Each key must map to an ARRAY OF STRINGS, even if empty
+    - Do not include any explanation text, metadata, or notes outside the JSON structure
+    - Never use special characters that could break JSON parsing
+    - Ensure all quotes, brackets, and commas are properly placed
+    - Escape any quotes within strings using backslash: \\"
+    - Never use objects like {{text: "content", importance: "high"}} - use only plain strings
 
+    SAMPLE EXPECTED OUTPUT 1:
+    ```
     {{
       "highlights": [
-        {{
-          "text": "This is an example highlight with important information.",
-          "importance": "high"
-        }},
-        {{
-          "text": "This is another example highlight with medium importance.",
-          "importance": "medium"
-        }}
+        "The model achieves 95.2% accuracy on the validation dataset.",
+        "Linear regression outperformed random forest for this specific application."
       ],
       "summary": [
-        "Example bullet point summarizing a key concept.",
-        "Another bullet point with important information."
+        "The study compared multiple regression models on financial data.",
+        "Linear regression was selected as the optimal approach."
       ],
       "methodologies": [
-        {{
-          "name": "Example Methodology",
-          "description": "Brief description of the methodology",
-          "implementation_details": "Details about implementation",
-          "validation_approach": "How it was validated"
-        }}
+        "Linear Regression with ridge regularization",
+        "Random Forest with 100 estimators"
       ],
       "assumptions": [
-        {{
-          "type": "data",
-          "assumption": "Example assumption about data quality",
-          "explicit": true,
-          "impact": "Potential impact of this assumption",
-          "validation": "How this assumption was validated"
-        }}
+        "The data follows a normal distribution.",
+        "Features are independent of each other."
       ],
       "figures_tables": [
-        {{
-          "identifier": "Figure 1",
-          "title": "Example Figure Title",
-          "description": "What this figure shows",
-          "key_insights": "Important takeaways from this figure",
-          "data_source": "Source of data used in this figure"
-        }}
-      ],
-      "context_relationships": [
-        {{
-          "related_to": "Another section name",
-          "relationship_type": "builds_on",
-          "description": "How this section relates to others"
-        }}
-      ],
-      "technical_terms": [
-        {{
-          "term": "Example technical term",
-          "category": "financial",
-          "definition": "Definition of this technical term"
-        }}
-      ],
-      "section_quality": {{
-        "completeness": 5,
-        "technical_depth": 4,
-        "clarity": 5,
-        "actionability": 4
-      }}
+        "Figure 3: Comparison of model accuracy across different approaches",
+        "Table 2: Feature importance rankings"
+      ]
     }}
+    ```
 
-    ## IMPORTANT INSTRUCTIONS
-    - For the "importance" field, use only one of these values: "high", "medium", or "low"
-    - For the "type" field in assumptions, use only one of these values: "data", "model", "business", or "implementation"
-    - For "explicit" field in assumptions, use only true or false (boolean values)
-    - For "relationship_type", use only one of these values: "prerequisite", "builds_on", "supports", "contrasts_with", or "validates"
-    - For "category" in technical terms, use only one of these values: "financial", "statistical", "domain-specific", or "acronym"
-    - For section quality scores, use integers between 1 and 5 inclusive
-    
-    Return ONLY the JSON output, nothing else.
+    SAMPLE EXPECTED OUTPUT 2:
+    ```
+    {{
+      "highlights": [
+        "The neural network architecture consists of 3 hidden layers with 64, 32, and 16 neurons respectively."
+      ],
+      "summary": [
+        "The document describes a deep learning approach for financial forecasting.",
+        "ReLU activation functions were used throughout the network.",
+        "Adam optimizer was selected with a learning rate of 0.001."
+      ],
+      "methodologies": [
+        "Deep neural network with 3 hidden layers",
+        "Adam optimization algorithm",
+        "Early stopping to prevent overfitting"
+      ],
+      "assumptions": [
+        "The financial time series data is stationary after preprocessing."
+      ],
+      "figures_tables": []
+    }}
+    ```
+
+    If a section has no relevant information, use an empty array:
+    "methodologies": []
+
+    DO NOT include any text outside the JSON structure. Your response should be ONLY the JSON object.
     """
     
     try:
@@ -231,75 +250,158 @@ def analyze_chunk_for_highlights(chunk):
             modelId="anthropic.claude-3-haiku-20240307-v1:0",
             body=json.dumps({
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 4000,
-                "temperature": 0.3
+                "max_tokens": 3000,
+                "temperature": 0.2  # Lower temperature for more consistent formatting
             })
         )
         
         response_body = json.loads(response['body'].read().decode('utf-8'))
-        return json.loads(response_body["content"])
-    
-    except json.JSONDecodeError as e:
-        logging.error(f"Invalid JSON in response: {str(e)}")
-        # Clean response before parsing
         content = response_body["content"]
-        # Attempt basic fixes like removing markdown code blocks
-        if content.startswith("```
-            content = content.split("```json", 1)[1]
-        if content.endswith("```
-            content = content.rsplit("```", 1)[0]
-        content = content.strip()
         
+        # Extract JSON if it's wrapped in code blocks
+        if "```
+            json_start = content.find("```json") + 7
+            json_end = content.rfind("```
+            json_string = content[json_start:json_end].strip()
+        elif "```" in content:
+            # Just regular code block without language
+            json_start = content.find("```
+            json_end = content.rfind("```")
+            json_string = content[json_start:json_end].strip()
+        else:
+            json_string = content.strip()
+        
+        # Parse JSON
         try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            logging.error("Failed to parse JSON even after cleanup")
-            return {"error": f"Failed to process chunk due to invalid JSON: {str(e)}",
-                   "chunk_preview": chunk[:200] + "..." if len(chunk) > 200 else chunk}
+            result = json.loads(json_string)
+            
+            # Validate structure
+            valid, message = validate_json_structure(result)
+            if not valid:
+                if retry_count < max_retries:
+                    logging.warning(f"Invalid JSON structure: {message}. Retrying ({retry_count+1}/{max_retries})...")
+                    return analyze_chunk_for_highlights(chunk, retry_count + 1, max_retries)
+                else:
+                    logging.error(f"Max retries reached. Last error: {message}")
+                    return {
+                        "highlights": [],
+                        "summary": [f"Error processing chunk: {message}"],
+                        "methodologies": [],
+                        "assumptions": [],
+                        "figures_tables": []
+                    }
+            
+            return result
+            
+        except json.JSONDecodeError as e:
+            if retry_count < max_retries:
+                logging.warning(f"JSON parsing error: {str(e)}. Retrying ({retry_count+1}/{max_retries})...")
+                return analyze_chunk_for_highlights(chunk, retry_count + 1, max_retries)
+            else:
+                logging.error(f"Failed to parse JSON after {max_retries} attempts. Error: {str(e)}")
+                return {
+                    "highlights": [],
+                    "summary": [f"Error processing chunk: Invalid JSON format"],
+                    "methodologies": [],
+                    "assumptions": [],
+                    "figures_tables": []
+                }
     
     except Exception as e:
         logging.error(f"Error processing chunk: {str(e)}")
-        return {"error": f"Failed to process chunk due to error: {str(e)}",
-               "chunk_preview": chunk[:200] + "..." if len(chunk) > 200 else chunk}
+        return {
+            "highlights": [],
+            "summary": [f"Error processing chunk: {str(e)}"],
+            "methodologies": [],
+            "assumptions": [],
+            "figures_tables": []
+        }
 
-
-
-
-
-
-def chunk_text(text, chunk_size=10000, overlap=500):
+def process_chunks_in_parallel(chunks, max_workers=5, max_retries=2):
     """
-    Splits text into manageable chunks for processing by LLM.
+    Process multiple chunks in parallel with retry logic.
     
     Args:
-        text (str): Full text extracted from the whitepaper.
-        chunk_size (int): Maximum size of each chunk in characters.
-        overlap (int): Overlap between chunks to preserve context.
-
+        chunks (list): List of text chunks to process.
+        max_workers (int): Maximum number of parallel workers.
+        max_retries (int): Maximum retry attempts per chunk.
+        
     Returns:
-        list: List of text chunks.
+        list: Results from all chunks.
     """
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
-    return chunks
+    results = []
+    processed_count = 0
+    failure_count = 0
+    
+    logging.info(f"Processing {len(chunks)} chunks with {max_workers} parallel workers...")
+    start_time = time.time()
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_chunk = {executor.submit(analyze_chunk_for_highlights, chunk, 0, max_retries): i 
+                         for i, chunk in enumerate(chunks)}
+        
+        # Process results as they complete
+        for future in as_completed(future_to_chunk):
+            chunk_idx = future_to_chunk[future]
+            processed_count += 1
+            
+            try:
+                result = future.result()
+                results.append(result)
+                
+                # Check if this was a failure
+                is_error = all(len(result.get(key, [])) == 0 for key in ["highlights", "methodologies", "assumptions", "figures_tables"])
+                if is_error and len(result.get("summary", [])) == 1 and "Error" in result.get("summary", [""])[0]:
+                    failure_count += 1
+                    
+                # Log progress
+                if processed_count % 5 == 0 or processed_count == len(chunks):
+                    logging.info(f"Processed {processed_count}/{len(chunks)} chunks ({failure_count} failures)")
+                
+            except Exception as e:
+                failure_count += 1
+                logging.error(f"Chunk {chunk_idx} processing failed with error: {str(e)}")
+                # Add empty result with error information
+                results.append({
+                    "highlights": [],
+                    "summary": [f"Failed to process chunk {chunk_idx}: {str(e)}"],
+                    "methodologies": [],
+                    "assumptions": [],
+                    "figures_tables": []
+                })
+    
+    end_time = time.time()
+    logging.info(f"Finished processing all chunks in {end_time - start_time:.2f} seconds")
+    logging.info(f"Success rate: {((len(chunks) - failure_count) / len(chunks)) * 100:.1f}% ({failure_count} failures out of {len(chunks)} chunks)")
+    
+    return results
 
-
-import boto3
-import json
-import logging
-
-
-
-
-
+def deduplicate_items(items):
+    """
+    Remove duplicate items while preserving order.
+    
+    Args:
+        items (list): List of strings to deduplicate.
+        
+    Returns:
+        list: Deduplicated list with order preserved.
+    """
+    seen = set()
+    result = []
+    
+    for item in items:
+        # Normalize the item text for comparison (lowercase, strip whitespace)
+        normalized = item.lower().strip()
+        if normalized not in seen:
+            seen.add(normalized)
+            result.append(item)  # Add original item, not normalized version
+            
+    return result
 
 def consolidate_highlights(results):
     """
-    Consolidates highlights from all chunks into a single structured output.
+    Consolidates highlights from all chunks into a single structured output with deduplication.
     
     Args:
         results (list): List of results from individual chunks.
@@ -315,20 +417,21 @@ def consolidate_highlights(results):
         "figures_tables": []
     }
     
+    # First pass - collect all items
     for result in results:
         if result.get("error"):
             logging.warning(f"Skipping failed result: {result['error']}")
             continue
         
-        consolidated["highlights"].extend(result.get("highlights", []))
-        consolidated["summary"].extend(result.get("summary", []))
-        consolidated["methodologies"].extend(result.get("methodologies", []))
-        consolidated["assumptions"].extend(result.get("assumptions", []))
-        consolidated["figures_tables"].extend(result.get("figures_tables", []))
+        for key in consolidated.keys():
+            consolidated[key].extend(result.get(key, []))
+    
+    # Second pass - deduplicate each category
+    for key in consolidated.keys():
+        consolidated[key] = deduplicate_items(consolidated[key])
+        logging.info(f"After deduplication: {len(consolidated[key])} unique {key}")
     
     return consolidated
-
-from docx import Document
 
 def export_to_word_highlights(consolidated_results, output_file_path):
     """
@@ -374,7 +477,6 @@ def export_to_word_highlights(consolidated_results, output_file_path):
     # Save the document
     doc.save(output_file_path)
 
-
 def main():
     """
     Main workflow for analyzing a whitepaper and extracting key highlights.
@@ -382,7 +484,6 @@ def main():
     Returns:
         None
     """
-    
     # Load extracted text from file
     extracted_text_path = "./extracted_content/extracted_text.txt"
     
@@ -392,30 +493,28 @@ def main():
         
         logging.info(f"Loaded extracted text from {extracted_text_path}")
         
-        # Step 1: Chunk the text
-        logging.info("Chunking extracted text...")
-        chunks = chunk_text(extracted_text)
+        # Step 1: Chunk the text using smart chunking that respects paragraph boundaries
+        logging.info("Smart chunking extracted text...")
+        chunks = smart_chunk_text(extracted_text)
+        logging.info(f"Created {len(chunks)} chunks")
         
-        # Step 2: Analyze each chunk using LLM
-        logging.info("Analyzing chunks...")
-        results = [analyze_chunk_for_highlights(chunk) for chunk in chunks]
+        # Step 2: Analyze chunks in parallel with retry logic
+        logging.info("Analyzing chunks in parallel...")
+        results = process_chunks_in_parallel(chunks, max_workers=5, max_retries=2)
         
-        # Step 3: Consolidate results across all chunks
-        logging.info("Consolidating results...")
+        # Step 3: Consolidate results with deduplication
+        logging.info("Consolidating results with deduplication...")
         consolidated_results = consolidate_highlights(results)
         
         # Step 4: Export results to Word document
         output_file_path = "./whitepaper_highlights.docx"
-        
         logging.info(f"Exporting highlights to Word document at {output_file_path}...")
-        
         export_to_word_highlights(consolidated_results, output_file_path)
         
         print(f"Highlights exported successfully to {output_file_path}")
     
     except Exception as e:
         logging.error(f"Error during whitepaper analysis workflow: {str(e)}")
-
 
 if __name__ == "__main__":
    main()

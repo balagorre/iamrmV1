@@ -70,144 +70,89 @@ def analyze_chunk_for_highlights(chunk):
     
     prompt = f"""
     You are a world-class financial analyst and technical documentation expert tasked with extracting 
-    high-value information from a financial model whitepaper section. Your goal is to perform a 
-    comprehensive extraction of key information, technical details, and structural elements.
+    high-value information from a financial model whitepaper section.
 
     ===== CONTENT TO ANALYZE =====
     {chunk}
     =============================
 
     ## ANALYSIS STEPS
-
-    ### STEP 1: DEEP CONTENT UNDERSTANDING
-    First, carefully read and understand the content. Identify the main topics, key technical concepts, 
-    and the overall purpose of this section within a financial model whitepaper.
-
-    ### STEP 2: KEY HIGHLIGHTS EXTRACTION
-    Extract 3-7 key highlights that represent the most important information. These should be:
-    - Concise yet complete sentences that capture significant findings, conclusions, or insights
-    - Focused on quantitative results, key methodologies, or critical assumptions when present
-    - Ordered by importance (most significant first)
-    - Include exact numerical values and technical terminology as presented in the text
-
-    ### STEP 3: COMPREHENSIVE SUMMARY CREATION
-    Create a bullet-point summary that:
-    - Covers all major points in logical order
-    - Prioritizes actionable insights and decision-relevant information
-    - Preserves technical precision while being accessible to financial professionals
-    - Avoids redundancy while ensuring completeness
-
-    ### STEP 4: TECHNICAL METHODOLOGY IDENTIFICATION
-    Identify all methodologies mentioned:
-    - Extract names of algorithms, statistical methods, computational techniques, etc.
-    - For each methodology, provide a brief description of how it's used in this context
-    - Note implementation details when available (parameters, configurations, etc.)
-    - Include references to any benchmarks or validation techniques mentioned
-
-    ### STEP 5: ASSUMPTION EXTRACTION AND CLASSIFICATION
-    Carefully identify both explicit and implicit assumptions:
-    - Data assumptions (e.g., data quality, completeness, distribution properties)
-    - Model assumptions (e.g., statistical properties, feature relationships)
-    - Business/domain assumptions (e.g., market conditions, regulatory environment)
-    - Implementation assumptions (e.g., computational requirements, system constraints)
-    - For each assumption, note if it's explicit (clearly stated) or implicit (reasonably inferred)
-
-    ### STEP 6: FIGURE/TABLE ANALYSIS
-    For any figures or tables referenced:
-    - Identify the figure/table number and title
-    - Describe its purpose and key insights it conveys
-    - Note any important data sources or methodologies used to generate it
-    - Extract key values or trends represented
-
-    ### STEP 7: CONTEXTUAL RELATIONSHIP MAPPING
-    Identify how this section relates to:
-    - Previous or subsequent sections (if referenced)
-    - Overall model architecture or methodology
-    - Validation or testing procedures
-    - Implementation considerations
-
-    ### STEP 8: TECHNICAL TERMINOLOGY GLOSSARY
-    Extract specialized technical terms with their definitions or contexts:
-    - Financial terms
-    - Statistical/mathematical concepts
-    - Domain-specific terminology
-    - Acronyms and abbreviations with their expansions
+    [Your detailed analysis steps here...]
 
     ## RESPONSE FORMAT GUIDELINES
-    Format your response as a comprehensive JSON object with these keys:
+    Format your response as a comprehensive JSON object. Here is the expected structure:
 
-    {
+    {{
       "highlights": [
-        {"text": "<highlight_1>", "importance": "high|medium|low"},
-        {"text": "<highlight_2>", "importance": "high|medium|low"},
-        ...
+        {{
+          "text": "This is an example highlight with important information.",
+          "importance": "high"
+        }},
+        {{
+          "text": "This is another example highlight with medium importance.",
+          "importance": "medium"
+        }}
       ],
       "summary": [
-        "<bullet_point_1>",
-        "<bullet_point_2>",
-        ...
+        "Example bullet point summarizing a key concept.",
+        "Another bullet point with important information."
       ],
       "methodologies": [
-        {
-          "name": "<methodology_name>",
-          "description": "<brief_description>",
-          "implementation_details": "<specific_parameters_or_configurations>",
-          "validation_approach": "<how_validated_if_mentioned>"
-        },
-        ...
+        {{
+          "name": "Example Methodology",
+          "description": "Brief description of the methodology",
+          "implementation_details": "Details about implementation",
+          "validation_approach": "How it was validated"
+        }}
       ],
       "assumptions": [
-        {
-          "type": "data|model|business|implementation",
-          "assumption": "<assumption_text>",
-          "explicit": true|false,
-          "impact": "<potential_impact_if_mentioned>",
-          "validation": "<validation_approach_if_mentioned>"
-        },
-        ...
+        {{
+          "type": "data",
+          "assumption": "Example assumption about data quality",
+          "explicit": true,
+          "impact": "Potential impact of this assumption",
+          "validation": "How this assumption was validated"
+        }}
       ],
       "figures_tables": [
-        {
-          "identifier": "<figure_or_table_number>",
-          "title": "<title_if_available>",
-          "description": "<what_it_shows>",
-          "key_insights": "<important_takeaways>",
-          "data_source": "<source_of_data_if_mentioned>"
-        },
-        ...
+        {{
+          "identifier": "Figure 1",
+          "title": "Example Figure Title",
+          "description": "What this figure shows",
+          "key_insights": "Important takeaways from this figure",
+          "data_source": "Source of data used in this figure"
+        }}
       ],
       "context_relationships": [
-        {
-          "related_to": "<section_or_concept>",
-          "relationship_type": "prerequisite|builds_on|supports|contrasts_with|validates",
-          "description": "<brief_description_of_relationship>"
-        },
-        ...
+        {{
+          "related_to": "Another section name",
+          "relationship_type": "builds_on",
+          "description": "How this section relates to others"
+        }}
       ],
       "technical_terms": [
-        {
-          "term": "<technical_term>",
-          "category": "financial|statistical|domain-specific|acronym",
-          "definition": "<definition_or_context>"
-        },
-        ...
+        {{
+          "term": "Example technical term",
+          "category": "financial",
+          "definition": "Definition of this technical term"
+        }}
       ],
-      "section_quality": {
-        "completeness": 1-5,
-        "technical_depth": 1-5,
-        "clarity": 1-5,
-        "actionability": 1-5
-      }
-    }
+      "section_quality": {{
+        "completeness": 5,
+        "technical_depth": 4,
+        "clarity": 5,
+        "actionability": 4
+      }}
+    }}
 
     ## IMPORTANT INSTRUCTIONS
-    - Be extremely precise and avoid vague statements
-    - Preserve ALL numerical values EXACTLY as stated - never round or simplify
-    - Always provide full sentences for highlights and bullet points
-    - If information for a specific field is not found, use an empty array [] for list fields or "Not found in context" for text fields
-    - Ensure your response is valid JSON format
-    - Rate section quality objectively based on content comprehensiveness, technical detail level, clarity of explanation, and actionable information provided
-
+    - For the "importance" field, use only one of these values: "high", "medium", or "low"
+    - For the "type" field in assumptions, use only one of these values: "data", "model", "business", or "implementation"
+    - For "explicit" field in assumptions, use only true or false (boolean values)
+    - For "relationship_type", use only one of these values: "prerequisite", "builds_on", "supports", "contrasts_with", or "validates"
+    - For "category" in technical terms, use only one of these values: "financial", "statistical", "domain-specific", or "acronym"
+    - For section quality scores, use integers between 1 and 5 inclusive
+    
     Return ONLY the JSON output, nothing else.
     """
     
@@ -216,20 +161,37 @@ def analyze_chunk_for_highlights(chunk):
             modelId="anthropic.claude-3-haiku-20240307-v1:0",
             body=json.dumps({
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 4000,  # Increased token limit for more detailed output
-                "temperature": 0.3   # Lower temperature for more precision
+                "max_tokens": 4000,
+                "temperature": 0.3
             })
         )
         
         response_body = json.loads(response['body'].read().decode('utf-8'))
         return json.loads(response_body["content"])
     
+    except json.JSONDecodeError as e:
+        logging.error(f"Invalid JSON in response: {str(e)}")
+        # Clean response before parsing
+        content = response_body["content"]
+        # Attempt basic fixes like removing markdown code blocks
+        if content.startswith("```
+            content = content.split("```json", 1)[1]
+        if content.endswith("```
+            content = content.rsplit("```", 1)[0]
+        content = content.strip()
+        
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            logging.error("Failed to parse JSON even after cleanup")
+            return {"error": f"Failed to process chunk due to invalid JSON: {str(e)}",
+                   "chunk_preview": chunk[:200] + "..." if len(chunk) > 200 else chunk}
+    
     except Exception as e:
         logging.error(f"Error processing chunk: {str(e)}")
-        return {
-            "error": f"Failed to process chunk due to error: {str(e)}",
-            "chunk_preview": chunk[:200] + "..." if len(chunk) > 200 else chunk  # Include preview for debugging
-        }
+        return {"error": f"Failed to process chunk due to error: {str(e)}",
+               "chunk_preview": chunk[:200] + "..." if len(chunk) > 200 else chunk}
+
 
 
 

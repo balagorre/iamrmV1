@@ -56,6 +56,76 @@ Implementation Code
 Here’s how we can implement this system:
 
 
+
+
+import concurrent.futures
+import logging
+import time
+
+def main():
+    """
+    Main workflow for analyzing a whitepaper and extracting key highlights with parallel processing.
+    
+    Returns:
+        None
+    """
+    # Configure logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    # Load extracted text from file
+    extracted_text_path = "./extracted_content/extracted_text.txt"
+    
+    try:
+        with open(extracted_text_path, "r", encoding="utf-8") as f:
+            extracted_text = f.read()
+        
+        logging.info(f"Loaded extracted text from {extracted_text_path}")
+        
+        # Step 1: Chunk the text
+        logging.info("Chunking extracted text...")
+        chunks = chunk_text(extracted_text)
+        logging.info(f"Created {len(chunks)} chunks")
+        
+        # Step 2: Analyze each chunk using LLM in parallel
+        logging.info("Analyzing chunks in parallel...")
+        start_time = time.time()
+        
+        # Use ThreadPoolExecutor for parallel processing
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # Submit all tasks and map them to their chunk indices
+            future_to_chunk = {executor.submit(analyze_chunk_for_highlights, chunk): i 
+                             for i, chunk in enumerate(chunks)}
+            
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_chunk):
+                chunk_idx = future_to_chunk[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    logging.info(f"Processed chunk {chunk_idx+1}/{len(chunks)}")
+                except Exception as e:
+                    logging.error(f"Chunk {chunk_idx+1} generated an exception: {str(e)}")
+        
+        end_time = time.time()
+        logging.info(f"All chunks processed in {end_time - start_time:.2f} seconds")
+        
+        # Step 3: Consolidate results across all chunks
+        logging.info("Consolidating results...")
+        consolidated_results = consolidate_highlights(results)
+        
+        # Step 4: Export results to Word document
+        output_file_path = "./whitepaper_highlights.docx"
+        logging.info(f"Exporting highlights to Word document at {output_file_path}...")
+        export_to_word_highlights(consolidated_results, output_file_path)
+        
+        print(f"Highlights exported successfully to {output_file_path}")
+    
+    except Exception as e:
+        logging.error(f"Error during whitepaper analysis workflow: {str(e)}")
+
+
+
 def analyze_chunk_for_highlights(chunk):
     """
     Analyzes a single chunk of text using Claude via AWS Bedrock to extract key highlights.

@@ -56,6 +56,180 @@ Implementation Code
 Here’s how we can implement this system:
 
 
+def analyze_chunk_for_highlights(chunk):
+    """
+    Analyzes a single chunk of text using Claude via AWS Bedrock to extract key highlights.
+    
+    Args:
+        chunk (str): A chunk of text to analyze.
+
+    Returns:
+        dict: Extracted highlights and structured analysis.
+    """
+    bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
+    
+    prompt = f"""
+    You are a world-class financial analyst and technical documentation expert tasked with extracting 
+    high-value information from a financial model whitepaper section. Your goal is to perform a 
+    comprehensive extraction of key information, technical details, and structural elements.
+
+    ===== CONTENT TO ANALYZE =====
+    {chunk}
+    =============================
+
+    ## ANALYSIS STEPS
+
+    ### STEP 1: DEEP CONTENT UNDERSTANDING
+    First, carefully read and understand the content. Identify the main topics, key technical concepts, 
+    and the overall purpose of this section within a financial model whitepaper.
+
+    ### STEP 2: KEY HIGHLIGHTS EXTRACTION
+    Extract 3-7 key highlights that represent the most important information. These should be:
+    - Concise yet complete sentences that capture significant findings, conclusions, or insights
+    - Focused on quantitative results, key methodologies, or critical assumptions when present
+    - Ordered by importance (most significant first)
+    - Include exact numerical values and technical terminology as presented in the text
+
+    ### STEP 3: COMPREHENSIVE SUMMARY CREATION
+    Create a bullet-point summary that:
+    - Covers all major points in logical order
+    - Prioritizes actionable insights and decision-relevant information
+    - Preserves technical precision while being accessible to financial professionals
+    - Avoids redundancy while ensuring completeness
+
+    ### STEP 4: TECHNICAL METHODOLOGY IDENTIFICATION
+    Identify all methodologies mentioned:
+    - Extract names of algorithms, statistical methods, computational techniques, etc.
+    - For each methodology, provide a brief description of how it's used in this context
+    - Note implementation details when available (parameters, configurations, etc.)
+    - Include references to any benchmarks or validation techniques mentioned
+
+    ### STEP 5: ASSUMPTION EXTRACTION AND CLASSIFICATION
+    Carefully identify both explicit and implicit assumptions:
+    - Data assumptions (e.g., data quality, completeness, distribution properties)
+    - Model assumptions (e.g., statistical properties, feature relationships)
+    - Business/domain assumptions (e.g., market conditions, regulatory environment)
+    - Implementation assumptions (e.g., computational requirements, system constraints)
+    - For each assumption, note if it's explicit (clearly stated) or implicit (reasonably inferred)
+
+    ### STEP 6: FIGURE/TABLE ANALYSIS
+    For any figures or tables referenced:
+    - Identify the figure/table number and title
+    - Describe its purpose and key insights it conveys
+    - Note any important data sources or methodologies used to generate it
+    - Extract key values or trends represented
+
+    ### STEP 7: CONTEXTUAL RELATIONSHIP MAPPING
+    Identify how this section relates to:
+    - Previous or subsequent sections (if referenced)
+    - Overall model architecture or methodology
+    - Validation or testing procedures
+    - Implementation considerations
+
+    ### STEP 8: TECHNICAL TERMINOLOGY GLOSSARY
+    Extract specialized technical terms with their definitions or contexts:
+    - Financial terms
+    - Statistical/mathematical concepts
+    - Domain-specific terminology
+    - Acronyms and abbreviations with their expansions
+
+    ## RESPONSE FORMAT GUIDELINES
+    Format your response as a comprehensive JSON object with these keys:
+
+    {
+      "highlights": [
+        {"text": "<highlight_1>", "importance": "high|medium|low"},
+        {"text": "<highlight_2>", "importance": "high|medium|low"},
+        ...
+      ],
+      "summary": [
+        "<bullet_point_1>",
+        "<bullet_point_2>",
+        ...
+      ],
+      "methodologies": [
+        {
+          "name": "<methodology_name>",
+          "description": "<brief_description>",
+          "implementation_details": "<specific_parameters_or_configurations>",
+          "validation_approach": "<how_validated_if_mentioned>"
+        },
+        ...
+      ],
+      "assumptions": [
+        {
+          "type": "data|model|business|implementation",
+          "assumption": "<assumption_text>",
+          "explicit": true|false,
+          "impact": "<potential_impact_if_mentioned>",
+          "validation": "<validation_approach_if_mentioned>"
+        },
+        ...
+      ],
+      "figures_tables": [
+        {
+          "identifier": "<figure_or_table_number>",
+          "title": "<title_if_available>",
+          "description": "<what_it_shows>",
+          "key_insights": "<important_takeaways>",
+          "data_source": "<source_of_data_if_mentioned>"
+        },
+        ...
+      ],
+      "context_relationships": [
+        {
+          "related_to": "<section_or_concept>",
+          "relationship_type": "prerequisite|builds_on|supports|contrasts_with|validates",
+          "description": "<brief_description_of_relationship>"
+        },
+        ...
+      ],
+      "technical_terms": [
+        {
+          "term": "<technical_term>",
+          "category": "financial|statistical|domain-specific|acronym",
+          "definition": "<definition_or_context>"
+        },
+        ...
+      ],
+      "section_quality": {
+        "completeness": 1-5,
+        "technical_depth": 1-5,
+        "clarity": 1-5,
+        "actionability": 1-5
+      }
+    }
+
+    ## IMPORTANT INSTRUCTIONS
+    - Be extremely precise and avoid vague statements
+    - Preserve ALL numerical values EXACTLY as stated - never round or simplify
+    - Always provide full sentences for highlights and bullet points
+    - If information for a specific field is not found, use an empty array [] for list fields or "Not found in context" for text fields
+    - Ensure your response is valid JSON format
+    - Rate section quality objectively based on content comprehensiveness, technical detail level, clarity of explanation, and actionable information provided
+
+    Return ONLY the JSON output, nothing else.
+    """
+    
+    try:
+        response = bedrock_client.invoke_model(
+            modelId="anthropic.claude-3-haiku-20240307-v1:0",
+            body=json.dumps({
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 4000,  # Increased token limit for more detailed output
+                "temperature": 0.3   # Lower temperature for more precision
+            })
+        )
+        
+        response_body = json.loads(response['body'].read().decode('utf-8'))
+        return json.loads(response_body["content"])
+    
+    except Exception as e:
+        logging.error(f"Error processing chunk: {str(e)}")
+        return {
+            "error": f"Failed to process chunk due to error: {str(e)}",
+            "chunk_preview": chunk[:200] + "..." if len(chunk) > 200 else chunk  # Include preview for debugging
+        }
 
 
 
@@ -86,66 +260,10 @@ import boto3
 import json
 import logging
 
-def analyze_chunk_for_highlights(chunk):
-    """
-    Analyzes a single chunk of text using Claude via AWS Bedrock to extract key highlights.
-    
-    Args:
-        chunk (str): A chunk of text to analyze.
 
-    Returns:
-        dict: Extracted highlights and structured analysis.
-    """
-    bedrock_client = boto3.client('bedrock-runtime', region_name='us-east-1')
-    
-    prompt = f"""
-    You are an expert tasked with analyzing a section of a financial model whitepaper. 
-    The goal is to extract key highlights, summarize the content, and identify technical details.
 
-    Read the following content carefully:
 
-    {chunk}
 
-    Tasks:
-    1. Extract **key highlights** from this section. These should be concise sentences capturing the most important points (e.g., findings, results, or conclusions).
-    2. Summarize the **main points** in bullet format. Ensure the summary captures actionable insights and avoids redundant information.
-    3. Identify any **methodologies** mentioned in this section (e.g., algorithms, statistical methods, or computational techniques). Provide their names and brief descriptions.
-    4. Extract any **assumptions** explicitly stated or implied in this section (e.g., data assumptions, model assumptions).
-    5. If figures or tables are referenced, describe their purpose briefly (e.g., "Table 1 shows performance metrics across test datasets").
-
-    Instructions:
-    - Be precise and avoid vague statements.
-    - Preserve numerical values exactly as stated (do not round or simplify).
-    - Use clear formatting for your response.
-    - If specific information is missing in this section, explicitly state "Not found in context."
-
-    Format your response as JSON with these keys:
-    {
-      "highlights": [<key_highlight_1>, <key_highlight_2>, ...],
-      "summary": [<bullet_point_1>, <bullet_point_2>, ...],
-      "methodologies": [<methodology_1>, <methodology_2>, ...],
-      "assumptions": [<assumption_1>, <assumption_2>, ...],
-      "figures_tables": [<figure_or_table_reference>]
-    }
-
-    Return only valid JSON output."""
-    
-    try:
-        response = bedrock_client.invoke_model(
-            modelId="anthropic.claude-3-haiku-20240307-v1:0",
-            body=json.dumps({
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 3000,
-                "temperature": 0.5
-            })
-        )
-        
-        response_body = json.loads(response['body'].read().decode('utf-8'))
-        return json.loads(response_body["content"])
-    
-    except Exception as e:
-        logging.error(f"Error processing chunk: {str(e)}")
-        return {"error": f"Failed to process chunk due to error: {str(e)}"}
 
 def consolidate_highlights(results):
     """

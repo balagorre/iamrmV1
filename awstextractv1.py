@@ -14,6 +14,166 @@ logging.basicConfig(level=logging.INFO)
 s3_client = boto3.client('s3')
 rekognition_client = boto3.client('rekognition')
 
+# Optional features
+enable_caption_tagging = True
+
+# Expanded section heading patterns
+SECTION_PATTERNS = {
+    'model_summary': ['executive summary', 'model summary'],
+    'inputs': ['model inputs', 'input variables', 'data sources'],
+    'outputs': ['model outputs', 'output variables', 'results'],
+    'calculations': ['calculations', 'estimation method', 'model methodology', 'formula'],
+    'monitoring': ['model monitoring', 'performance monitoring'],
+    'validation': ['model validation', 'backtesting'],
+    'assumptions': ['assumptions', 'adjustments'],
+    'limitations': ['limitations', 'constraints'],
+    'governance': ['governance', 'oversight'],
+    'controls': ['controls', 'checks', 'internal controls'],
+    'use_case': ['use case', 'application of model']
+}
+
+def classify_section(heading):
+    heading_lower = heading.lower()
+    for section_type, patterns in SECTION_PATTERNS.items():
+        if any(p in heading_lower for p in patterns):
+            return section_type
+    return 'unclassified'
+
+def is_toc_page(page_lines):
+    indicators = ['table of contents', 'contents', '.....']
+    toc_count = sum(1 for line in page_lines if any(ind in line.lower() for ind in indicators))
+    return toc_count >= 2
+
+# Enhanced Text/Table Extraction with TOC filter
+def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
+    try:
+        textract_json = call_textract(
+            input_document=f"s3://{bucket}/{document_key}",
+            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
+            boto3_textract_client=boto3.client('textract')
+        )
+
+        t_document = TDocumentSchema().load(textract_json)
+        structured_pages = []
+        last_known_section = 'unclassified'
+
+        for page_index, page in enumerate(t_document.pages, start=1):
+            lines = [b.text.strip() for b in page.blocks if b.block_type == TBlockType.LINE]
+            is_toc = is_toc_page(lines)
+
+            page_content = {
+                'page_number': page_index,
+                'headings': [],
+                'paragraphs': [],
+                'tables': [],
+                'section_type': 'toc' if is_toc else last_known_section
+            }
+
+            if not is_toc:
+                for block in page.blocks:
+                    if block.block_type == TBlockType.LINE:
+                        text = block.text.strip()
+                        if block.geometry.bounding_box.height > heading_height_threshold:
+                            page_content['headings'].append(text)
+                            section_guess = classify_section(text)
+                            if section_guess != 'unclassified':
+                                page_content['section_type'] = section_guess
+                                last_known_section = section_guess
+                        else:
+                            page_content['paragraphs'].append(text)
+
+            for table_index, table in enumerate(page.tables, start=1):
+                table_data = {
+                    'table_number': table_index,
+                    'section_type': page_content['section_type'],
+                    'data': [[cell.text.strip() for cell in row.cells] for row in table.rows]
+                }
+                page_content['tables'].append(table_data)
+
+            structured_pages.append(page_content)
+
+        logging.info("Text and tables extracted with section tagging, TOC filtering.")
+        return structured_pages
+
+    except Exception as e:
+        logging.error(f"Error extracting text and tables: {e}")
+        raise
+
+# Image extraction with optional caption tagging
+def extract_images(bucket, pdf_key, output_bucket, output_prefix):
+    try:
+        pdf_obj = s3_client.get_object(Bucket=bucket, Key=pdf_key)
+        pdf_bytes = pdf_obj['Body'].read()
+
+        pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+        extracted_images = []
+
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            images = page.get_images(full=True)
+            text_blocks = page.get_text("dict")['blocks']
+
+            for img_index, img in enumerate(images):
+                xref = img[0]
+                base_image = pdf_document.extract_image(xref)
+                image_bytes = base_image["image"]
+                image_ext = base_image["ext"]
+                image_name = f"{output_prefix}/page_{page_num + 1}_image_{img_index + 1}.{image_ext}"
+
+                s3_client.put_object(Bucket=output_bucket, Key=image_name, Body=image_bytes)
+
+                image_data = {"image_key": image_name}
+
+                if enable_caption_tagging:
+                    bbox = img[1:5]  # x0, y0, x1, y1
+                    possible_captions = []
+                    for block in text_blocks:
+                        for line in block.get("lines", []):
+                            line_text = " ".join([span["text"] for span in line["spans"]])
+                            y = line["bbox"][1]
+                            if bbox[1] - 50 < y < bbox[3] + 50:
+                                possible_captions.append(line_text)
+                    image_data["caption"] = possible_captions[:2]
+
+                extracted_images.append(image_data)
+
+        logging.info("Images extracted with optional captions.")
+        return extracted_images
+
+    except Exception as e:
+        logging.error(f"Error extracting images: {e}")
+        raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import boto3
+import fitz  # PyMuPDF
+import json
+import concurrent.futures
+import logging
+from datetime import datetime
+from textractcaller.t_call import call_textract, Textract_Features
+from textractprettyprinter.t_pretty_print import get_text_from_layout_json
+from trp.trp2 import TDocumentSchema, TBlockType
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+
+s3_client = boto3.client('s3')
+rekognition_client = boto3.client('rekognition')
+
 # Expanded section heading patterns to support real-world content
 SECTION_PATTERNS = {
     'model_summary': ['executive summary', 'model summary'],

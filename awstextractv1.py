@@ -1,3 +1,8 @@
+pip install textractcaller
+pip install amazon-textract-response-parser
+pip install amazon-textract-prettyprinter
+
+
 To **run the full pipeline**, you now just need a simple **orchestration function** that:
 
 1. Calls your existing `extract_text_tables(...)`  

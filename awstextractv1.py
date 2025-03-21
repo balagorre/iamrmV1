@@ -3,6 +3,114 @@ import fitz  # PyMuPDF
 import json
 import concurrent.futures
 import logging
+import os
+from datetime import datetime
+from textractcaller.t_call import call_textract, Textract_Features
+from textractprettyprinter.t_pretty_print import get_text_from_layout_json
+from trp.trp2 import TDocumentSchema, TBlockType
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+
+s3_client = boto3.client('s3')
+rekognition_client = boto3.client('rekognition')
+
+# Optional features
+enable_caption_tagging = True
+
+# SECTION_PATTERNS (same as current canvas version)
+SECTION_PATTERNS = { ... }  # Keep existing definitions as they are
+
+# classify_section(), is_toc_page(), extract_text_tables() remain unchanged
+
+# --- Full Image Handling with Caption Tagging ---
+def extract_images_with_captions(bucket, pdf_key, output_bucket, output_prefix):
+    pdf_obj = s3_client.get_object(Bucket=bucket, Key=pdf_key)
+    pdf_bytes = pdf_obj['Body'].read()
+    pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    extracted_images = []
+
+    for page_num in range(len(pdf_document)):
+        page = pdf_document.load_page(page_num)
+        images = page.get_images(full=True)
+        text_blocks = page.get_text("dict")['blocks']
+
+        for img_index, img in enumerate(images):
+            xref = img[0]
+            base_image = pdf_document.extract_image(xref)
+            image_bytes = base_image["image"]
+            image_ext = base_image["ext"]
+            image_name = f"{output_prefix}/page_{page_num + 1}_img_{img_index + 1}.{image_ext}"
+            
+            # Save to S3
+            s3_client.put_object(Bucket=output_bucket, Key=image_name, Body=image_bytes)
+
+            image_data = {"image_s3_key": image_name, "page_number": page_num + 1}
+
+            # Caption detection
+            if enable_caption_tagging:
+                bbox = img[1:5]
+                possible_captions = []
+                for block in text_blocks:
+                    for line in block.get("lines", []):
+                        line_text = " ".join([span["text"] for span in line["spans"]])
+                        y = line["bbox"][1]
+                        if bbox[1] - 50 < y < bbox[3] + 50:
+                            possible_captions.append(line_text)
+                image_data["captions"] = possible_captions[:2]
+
+            extracted_images.append(image_data)
+
+    return extracted_images
+
+# --- Table Classification Logic ---
+def classify_table_by_header(headers):
+    keywords = {
+        "input_parameters": ['feature', 'variable', 'input'],
+        "evaluation_metrics": ['accuracy', 'precision', 'recall', 'f1'],
+        "confusion_matrix": ['actual', 'predicted', 'true positive', 'false positive'],
+        "threshold_metrics": ['threshold', 'cutoff', 'probability']
+    }
+    for table_type, terms in keywords.items():
+        if any(any(term in h.lower() for term in terms) for h in headers):
+            return table_type
+    return "general"
+
+# Apply classification after text extraction
+def classify_tables_in_output(structured_output):
+    for page in structured_output.get("structured_pages", []):
+        for table in page.get("tables", []):
+            if table['data']:
+                header_row = table['data'][0]
+                table['table_type'] = classify_table_by_header(header_row)
+    return structured_output
+
+# --- Export to S3 and Local Filesystem ---
+def export_output(output_data, output_bucket, output_prefix, local_filename):
+    # Export to S3
+    s3_key = f"{output_prefix}/structured_output.json"
+    s3_client.put_object(
+        Bucket=output_bucket,
+        Key=s3_key,
+        Body=json.dumps(output_data, indent=2).encode('utf-8')
+    )
+
+    # Export to local filesystem
+    with open(local_filename, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, indent=2)
+
+    logging.info(f"Output exported to S3 (s3://{output_bucket}/{s3_key}) and local file ({local_filename})")
+
+# Call these new functions in your main orchestration or testing logic as needed.
+
+
+
+
+import boto3
+import fitz  # PyMuPDF
+import json
+import concurrent.futures
+import logging
 from datetime import datetime
 from textractcaller.t_call import call_textract, Textract_Features
 from textractprettyprinter.t_pretty_print import get_text_from_layout_json

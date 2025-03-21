@@ -19,6 +19,155 @@ enable_caption_tagging = True
 
 # Expanded section heading patterns
 SECTION_PATTERNS = {
+    'upstreams': ['upstream systems', 'data ingestion', 'data source architecture'],
+    'downstreams': ['downstream systems', 'model consumers', 'system integration'],
+    'model_vetting': ['model vetting', 'user vetting', 'approval workflow'],
+    'model_summary': ['executive summary', 'model summary', 'introduction and scope', 'overview'],
+    'inputs': ['model inputs', 'input variables', 'data sources', 'data dictionary', 'input features'],
+    'outputs': ['model outputs', 'output variables', 'results', 'scorecard outputs', 'predictions'],
+    'calculations': ['calculations', 'estimation method', 'model methodology', 'formulas', 'mathematical approach'],
+    'monitoring': ['model monitoring', 'performance monitoring', 'ongoing monitoring'],
+    'validation': ['model validation', 'backtesting', 'performance testing', 'benchmarking'],
+    'assumptions': ['assumptions', 'adjustments', 'business assumptions'],
+    'limitations': ['limitations', 'constraints', 'challenges', 'known issues'],
+    'governance': ['governance', 'oversight', 'model governance'],
+    'controls': ['controls', 'checks', 'internal controls', 'control framework'],
+    'use_case': ['use case', 'application of model', 'business use case'],
+    'risk_management': ['risk management', 'model risk', 'model risk management'],
+    'development': ['model development', 'model design', 'development approach'],
+    'implementation': ['model implementation', 'deployment details', 'production readiness'],
+    'testing': ['testing strategy', 'test plan', 'unit testing', 'integration testing'],
+    'reconciliation': ['reconciliation testing', 'test coverage', 'results reconciliation'],
+    'research': ['future research', 'enhancements', 'research opportunities'],
+    'references': ['references', 'bibliography', 'citations'],
+    'business_context': ['business context', 'problem statement', 'business objective', 'model purpose'],
+    'dependencies': ['system dependencies', 'model dependencies', 'library dependencies'],
+    'retraining': ['model retraining', 'refresh frequency', 'update cycle'],
+    'change_log': ['model changes', 'version history', 'change log', 'model adjustments'],
+    'data_quality': ['data quality', 'missing values', 'data validation checks'],
+    'integration': ['integration testing', 'deployment pipeline', 'integration plan'],
+    'explainability': ['explainability', 'model interpretability', 'shap values'],
+    'compliance': ['compliance checks', 'regulatory mapping', 'policy alignment'],
+    'performance': ['performance metrics', 'kpis', 'model accuracy'],
+    'alerts': ['threshold alerts', 'monitoring thresholds', 'early warning signals']
+}
+
+def classify_section(heading):
+    heading_lower = heading.lower()
+    for section_type, patterns in SECTION_PATTERNS.items():
+        if any(p in heading_lower for p in patterns):
+            return section_type
+    return 'unclassified'
+
+def is_toc_page(page_lines):
+    indicators = ['table of contents', 'contents', '.....']
+    toc_count = sum(1 for line in page_lines if any(ind in line.lower() for ind in indicators))
+    return toc_count >= 2
+
+# Enhanced Text/Table Extraction with TOC filter and table stitching
+def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
+    try:
+        textract_json = call_textract(
+            input_document=f"s3://{bucket}/{document_key}",
+            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
+            boto3_textract_client=boto3.client('textract')
+        )
+
+        t_document = TDocumentSchema().load(textract_json)
+        structured_pages = []
+        last_known_section = 'unclassified'
+        last_table = None
+
+        for page_index, page in enumerate(t_document.pages, start=1):
+            lines = [b.text.strip() for b in page.blocks if b.block_type == TBlockType.LINE]
+            is_toc = is_toc_page(lines)
+
+            page_content = {
+                'page_number': page_index,
+                'headings': [],
+                'paragraphs': [],
+                'tables': [],
+                'section_type': 'toc' if is_toc else last_known_section
+            }
+
+            if not is_toc:
+                for block in page.blocks:
+                    if block.block_type == TBlockType.LINE:
+                        text = block.text.strip()
+                        if block.geometry.bounding_box.height > heading_height_threshold:
+                            page_content['headings'].append(text)
+                            section_guess = classify_section(text)
+                            if section_guess != 'unclassified':
+                                page_content['section_type'] = section_guess
+                                last_known_section = section_guess
+                        else:
+                            page_content['paragraphs'].append(text)
+
+            for table_index, table in enumerate(page.tables, start=1):
+                new_table_data = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+
+                if last_table and last_table['section_type'] == page_content['section_type']:
+                    # Attempt stitching: if table structure looks similar, continue appending
+                    if last_table['data'] and new_table_data:
+                        if len(last_table['data'][0]) == len(new_table_data[0]):
+                            last_table['data'].extend(new_table_data)
+                            continue
+
+                # Otherwise treat as new table
+                table_data = {
+                    'table_number': table_index,
+                    'section_type': page_content['section_type'],
+                    'data': new_table_data
+                }
+                page_content['tables'].append(table_data)
+                last_table = table_data
+
+            structured_pages.append(page_content)
+
+        logging.info("Text and tables extracted with section tagging, TOC filtering, and table stitching.")
+        return {
+            'model_metadata': {
+                'document_key': document_key,
+                'extracted_at': datetime.utcnow().isoformat()
+            },
+            'structured_pages': structured_pages
+        }
+
+    except Exception as e:
+        logging.error(f"Error extracting text and tables: {e}")
+        raise
+
+# Image extraction with optional caption tagging
+# (no change needed for table stitching)
+# Remaining image code continues unchanged...
+
+
+
+
+
+
+
+import boto3
+import fitz  # PyMuPDF
+import json
+import concurrent.futures
+import logging
+from datetime import datetime
+from textractcaller.t_call import call_textract, Textract_Features
+from textractprettyprinter.t_pretty_print import get_text_from_layout_json
+from trp.trp2 import TDocumentSchema, TBlockType
+
+# Initialize logging
+logging.basicConfig(level=logging.INFO)
+
+s3_client = boto3.client('s3')
+rekognition_client = boto3.client('rekognition')
+
+# Optional features
+enable_caption_tagging = True
+
+# Expanded section heading patterns
+SECTION_PATTERNS = {
     'model_summary': ['executive summary', 'model summary'],
     'inputs': ['model inputs', 'input variables', 'data sources'],
     'outputs': ['model outputs', 'output variables', 'results'],

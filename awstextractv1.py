@@ -1,3 +1,89 @@
+To **run the full pipeline**, you now just need a simple **orchestration function** that:
+
+1. Calls your existing `extract_text_tables(...)`  
+2. Extracts images via `extract_images_with_captions(...)`  
+3. Classifies tables via `classify_tables_in_output(...)`  
+4. Exports everything using `export_output(...)`  
+
+---
+
+### ✅ Here's how to write and run it:
+
+#### 🔧 Step 1: Add this orchestration function to the bottom of your script:
+```python
+def run_full_extraction_pipeline(
+    input_bucket,
+    input_pdf_key,
+    output_bucket,
+    output_prefix,
+    local_output_path
+):
+    # Step 1: Extract structured text/tables
+    structured_output = extract_text_tables(
+        bucket=input_bucket,
+        document_key=input_pdf_key
+    )
+
+    # Step 2: Classify tables
+    structured_output = classify_tables_in_output(structured_output)
+
+    # Step 3: Extract and caption images
+    image_results = extract_images_with_captions(
+        bucket=input_bucket,
+        pdf_key=input_pdf_key,
+        output_bucket=output_bucket,
+        output_prefix=output_prefix
+    )
+
+    # Step 4: Combine output
+    full_output = {
+        "model_metadata": {
+            "document_key": input_pdf_key,
+            "extracted_at": datetime.utcnow().isoformat()
+        },
+        "structured_pages": structured_output["structured_pages"],
+        "images_analysis": image_results
+    }
+
+    # Step 5: Export to S3 and local file
+    export_output(
+        output_data=full_output,
+        output_bucket=output_bucket,
+        output_prefix=output_prefix,
+        local_filename=local_output_path
+    )
+
+    logging.info("✅ Full pipeline completed successfully.")
+```
+
+---
+
+#### ▶️ Step 2: Run the function with real inputs
+You can now call this from a `main()` or a test script:
+```python
+if __name__ == "__main__":
+    run_full_extraction_pipeline(
+        input_bucket="your-source-s3-bucket",
+        input_pdf_key="path/to/your-whitepaper.pdf",
+        output_bucket="your-target-s3-bucket",
+        output_prefix="structured-results/whitepaper001",
+        local_output_path="whitepaper001_structured.json"
+    )
+```
+
+---
+
+Let me know if you want:
+- A version using environment variables or CLI args  
+- A batch processor for multiple files  
+- Or you want me to add this orchestration block directly to your canvas now?
+
+
+
+
+
+
+
 import boto3
 import fitz  # PyMuPDF
 import json

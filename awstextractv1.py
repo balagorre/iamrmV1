@@ -1,3 +1,8 @@
+from trp.trp2 import TDocumentSchema, TDocument, TPage, TLine, TTable, TKeyValueSet
+
+
+
+
 pip install textractcaller
 pip install amazon-textract-response-parser
 pip install amazon-textract-prettyprinter

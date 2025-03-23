@@ -1,108 +1,122 @@
 import boto3
+import tempfile
+import os
+import traceback
 import json
-import os  # Import the 'os' module
+from botocore.exceptions import ClientError
 from textractcaller.t_call import call_textract, Textract_Features
 from textractprettyprinter.t_pretty_print import get_text_from_layout_json, get_tables_string, convert_table_to_list
+
+# Logging setup
 import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# --- Configuration ---
-BEDROCK_REGION = 'us-east-1'  # Your Bedrock region (if needed later)
-OUTPUT_DIR = 'textract_output'  # Directory to store Textract JSON results
-
-# --- Setup Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- Helper Functions ---
-
-def extract_text_and_tables_from_pdf(pdf_path, output_dir=OUTPUT_DIR):
-    """
-    Extracts text, tables, and layout information from a PDF using Textract.
-    Saves the raw JSON response and a processed version (text + tables).
-
-    Args:
-        pdf_path: Path to the input PDF file.
-        output_dir: Directory to save the Textract output.
-
-    Returns:
-        A dictionary containing:
-          - 'text':  The extracted plain text.
-          - 'tables': A list of tables (each table is a list of lists).
-          - 'json_path': Path to the saved raw Textract JSON.
-          - 'processed_path': Path to the saved processed text and tables.
-        Or None if an error occurs.
-    """
+def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) -> bool:
+    """Downloads a file from S3."""
     try:
-        # Create the output directory if it doesn't exist
-        os.makedirs(output_dir, exist_ok=True)
+        s3_client = boto3.client('s3')
+        s3_client.download_file(bucket_name, object_key, local_file_path)
+        logger.info(f"Downloaded s3://{bucket_name}/{object_key} to {local_file_path}")
+        return True
+    except ClientError as e:
+        logger.error(f"Error downloading from S3: {e}")
+        return False
 
-        # Call Textract with LAYOUT and TABLES features
-        textract_json = call_textract(
-            input_document=pdf_path,
-            features=[Textract_Features.LAYOUT, Textract_Features.TABLES]
+def extract_text_and_tables_from_pdf(local_file_path: str, textract_client) -> dict:
+    """Extracts text and tables from a PDF using Textract."""
+    try:
+        logger.info(f"Extracting text from: {local_file_path}")
+
+        with open(local_file_path, 'rb') as file:
+            pdf_bytes = file.read()
+
+        response = call_textract(
+            input_document=pdf_bytes,  # Pass bytes, NOT the file path
+            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
+            textract_client=textract_client
         )
+        # Check if the response is valid and contains 'Blocks'
+        if not response or 'Blocks' not in response:
+            logger.error(f"Invalid Textract response: {response}")
+            return {}
 
-        # --- Save Raw Textract JSON ---
-        base_filename = os.path.splitext(os.path.basename(pdf_path))[0]  # Filename without extension
-        json_path = os.path.join(output_dir, f"{base_filename}_textract.json")
-        with open(json_path, 'w') as f:
-            json.dump(textract_json, f, indent=4)
-        logging.info(f"Saved raw Textract JSON to: {json_path}")
+        print(f"Textract Response (truncated): {json.dumps(response)[:500]}")  # Debug print
 
-
-        # --- Processed Text and Tables ---
-        text = get_text_from_layout_json(textract_json) # Get the plain text
+        text = get_text_from_layout_json(response)
         tables = []
         try:
-            tables_string = get_tables_string(textract_json)
-            table_list = convert_table_to_list(textract_json)
-            if table_list: #check if tables are empty or not
-               tables = table_list # Extract Tables
+            tables_string = get_tables_string(response)
+            table_list = convert_table_to_list(response)
+            if table_list:  # Check if tables are empty
+                tables = table_list
         except Exception as e:
-            logging.warning(f"Error extracting tables, No Tables found: {e}")
+            logger.warning(f"Error extracting tables: {e}")
 
-        processed_path = os.path.join(output_dir, f"{base_filename}_processed.json")
-        with open(processed_path, 'w') as f:
-            json.dump({'text': text, 'tables': tables}, f, indent=4)
-        logging.info(f"Saved processed text and tables to: {processed_path}")
-        return {
-            'text': text,
-            'tables': tables,
-            'json_path': json_path,
-            'processed_path': processed_path
-        }
+        return {'text': text, 'tables': tables}
 
+    except ClientError as e:
+        logger.error(f"Textract ClientError: {e}")
+        traceback.print_exc()
+        return {}
     except Exception as e:
-        logging.error(f"Error processing PDF {pdf_path}: {e}")
-        return None
+        logger.error(f"Error extracting text/tables: {e}")
+        traceback.print_exc()
+        return {}
 
-def load_processed_textract_output(processed_path):
-    """Loads processed Textract output (text and tables) from a JSON file."""
+
+def save_processed_output(data: dict, output_file_path: str) -> None:
+    """Saves the processed text and tables to a JSON file."""
     try:
-        with open(processed_path, 'r') as f:
-            data = json.load(f)
-            return data['text'], data['tables']
+        with open(output_file_path, 'w', encoding='utf-8') as outfile:
+            json.dump(data, outfile, indent=4)
+        logger.info(f"Saved processed output to {output_file_path}")
     except Exception as e:
-        logging.error(f"Error loading processed Textract output from {processed_path}: {e}")
-        return None, None
-# --- Main Execution (Example) ---
+        logger.error(f"Error saving output: {e}")
+        traceback.print_exc()
+
+def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> bool:
+    """Downloads PDF from S3, extracts text/tables, saves processed output."""
+    local_file_path = None  # Initialize
+    try:
+        os.makedirs(output_dir, exist_ok=True) # Create output directory
+        base_filename = os.path.splitext(os.path.basename(object_key))[0]
+        output_file_path = os.path.join(output_dir, f"{base_filename}_processed.json")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            local_file_path = temp_file.name
+
+            if not download_s3_file(bucket_name, object_key, local_file_path):
+                return False
+
+            textract_client = boto3.client('textract')
+            extracted_data = extract_text_and_tables_from_pdf(local_file_path, textract_client)
+
+            if not extracted_data or not extracted_data.get('text', '').strip():
+                logger.error("No text was extracted.")
+                return False
+
+            save_processed_output(extracted_data, output_file_path)
+            return True
+
+    except Exception as e:
+        logger.error(f"Error processing document: {e}")
+        traceback.print_exc()
+        return False
+
+    finally:
+        if local_file_path and os.path.exists(local_file_path):
+            os.remove(local_file_path)
+            logger.info(f"Deleted temp file: {local_file_path}")
 
 if __name__ == "__main__":
-    whitepaper_path = 'path/to/whitepaper.pdf'  # Replace
-    test_plan_path = 'path/to/test_plan.pdf'  # Replace
-    test_results_path = 'path/to/test_results.pdf'  # Replace
+    bucket_name = "your-s3-bucket-name"  # Replace with your bucket name
+    object_key_whitepaper = "path/to/your/whitepaper.pdf"  # Replace with your whitepaper path
+    output_dir = "extracted_output"  # Output directory
+
     # Process Whitepaper
-    whitepaper_data = extract_text_and_tables_from_pdf(whitepaper_path)
-    if whitepaper_data:
-        print(f"Whitepaper processing successful. Saved to: {whitepaper_data['processed_path']}")
-        # Example of loading the processed data:
-        # loaded_text, loaded_tables = load_processed_textract_output(whitepaper_data['processed_path'])
-
-    # Process Test Plan
-    test_plan_data = extract_text_and_tables_from_pdf(test_plan_path)
-    if test_plan_data:
-        print(f"Test Plan processing successful. Saved to: {test_plan_data['processed_path']}")
-
-    # Process Test Results
-    test_results_data = extract_text_and_tables_from_pdf(test_results_path)
-    if test_results_data:
-        print(f"Test Results processing successful. Saved to: {test_results_data['processed_path']}")
+    success_whitepaper = extract_from_s3_pdf(bucket_name, object_key_whitepaper, output_dir)
+    if success_whitepaper:
+        logger.info(f"Whitepaper extraction successful!")
+    else:
+        logger.error("Whitepaper extraction failed.")

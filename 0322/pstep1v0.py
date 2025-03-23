@@ -107,29 +107,29 @@ def generate_table_schema(table_data):
     # schema = llm_client.generate_schema(table_data)
     # For now, let's return a simple static schema
     if table_data and len(table_data) > 0:
-          num_columns = len(table_data[0])
-          schema = {f"column_{i+1}": "text" for i in range(num_columns)}
+        num_columns = len(table_data[0])
+        schema = {f"column_{i+1}": "text" for i in range(num_columns)}
     else:
         schema = {}  # Empty table, empty schema
     return schema
 
-def extract_text_from_s3_pdf(bucket_name, object_key):
+def extract_text_from_s3_pdf(bucket_name, object_key, output_file_path):
     """
-    Downloads a PDF from S3, extracts tables and text (excluding headers/footers/page numbers),
-    and returns the extracted data.
+    Downloads a PDF from S3, extracts tables and text, generates table schemas,
+    and saves the output to a JSON file.
     """
-    local_file_path = None  # Initialize to None
+    local_file_path = None
     try:
         s3_client = boto3.client('s3')
         textract_client = boto3.client('textract')
 
-        # Create a temporary file
+        # Create a temporary file for the PDF
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             local_file_path = temp_file.name
 
             # Download the file from S3 to the temporary file
             if not download_s3_file(bucket_name, object_key, local_file_path):
-                return None
+                return False
 
             # Extract text using Textract
             extracted_text = extract_text_from_pdf(local_file_path, textract_client)
@@ -138,8 +138,8 @@ def extract_text_from_s3_pdf(bucket_name, object_key):
             tables_with_confidence = extract_tables_from_pdf(local_file_path)
 
             if extracted_text is None or tables_with_confidence is None:
-                print("Error: Text or Tables extractions is returning None")
-                return None
+                print("Error: Text or Tables extraction is returning None")
+                return False
 
             # Generate schema for each table
             tables_with_schema = []
@@ -148,23 +148,34 @@ def extract_text_from_s3_pdf(bucket_name, object_key):
                     table_schema = generate_table_schema(table)
                     tables_with_schema.append({"table": table, "confidence": confidence, "schema": table_schema})
 
-            return {"text": extracted_text, "tables": tables_with_schema}
+            # Create the output data structure
+            output_data = {
+                "text": extracted_text,
+                "tables": tables_with_schema
+            }
+
+            # Save the output to a JSON file
+            with open(output_file_path, 'w', encoding='utf-8') as outfile:
+                json.dump(output_data, outfile, indent=4, ensure_ascii=False)  # Ensure proper encoding
+
+
+            return True  # Indicate success
 
     except boto3.exceptions.S3.NoSuchBucket:
         print(f"Error: Bucket not found: {bucket_name}")
-        return None
+        return False
 
     except s3_client.exceptions.NoSuchKey:
         print(f"Error: Object not found: s3://{bucket_name}/{object_key}")
-        return None
+        return False
     except ClientError as e:
         print(f"AWS ClientError: {e}")
-        return None
+        return False
 
     except Exception as e:
         print(f"Error processing document: {e}")
-        traceback.print_exc()  # Print the traceback
-        return None
+        traceback.print_exc()
+        return False
 
     finally:
         # Ensure the temporary file is deleted
@@ -175,18 +186,11 @@ def extract_text_from_s3_pdf(bucket_name, object_key):
 if __name__ == "__main__":
     bucket_name = "your-s3-bucket-name"  # Replace with your bucket name
     object_key = "path/to/your/whitepaper.pdf"  # Replace with your object key
+    output_file_path = "output.json"  # Replace with your desired output file path
 
-    extracted_data = extract_text_from_s3_pdf(bucket_name, object_key)
+    success = extract_text_from_s3_pdf(bucket_name, object_key, output_file_path)
 
-    if extracted_data:
-        print("Extraction successful!")
-        print("Extracted Text:")
-        print(extracted_data["text"])
-        print("Extracted Tables:")
-        for table_data in extracted_data["tables"]:
-            print(f"Table: {table_data['table']}, Confidence: {table_data['confidence']}, Schema: {table_data['schema']}")
-            # Convert table data to JSON format for printing
-            table_json = json.dumps(table_data['table'], indent=4)
-            print(f"Table (JSON):\n{table_json}")
+    if success:
+        print(f"Extraction successful! Output saved to {output_file_path}")
     else:
         print("Text extraction failed.")

@@ -1,5 +1,4 @@
 import boto3
-import fitz  # PyMuPDF
 import json
 import concurrent.futures
 import logging
@@ -15,8 +14,6 @@ logging.basicConfig(level=logging.INFO)
 s3_client = boto3.client('s3')
 rekognition_client = boto3.client('rekognition')
 
-# Optional features
-enable_caption_tagging = True
 
 SECTION_PATTERNS = {
     'upstreams': ['upstream systems', 'data ingestion', 'data source architecture'],
@@ -196,7 +193,6 @@ if __name__ == "__main__":
         output_prefix=output_prefix,
         local_output_path=local_output_path
     )
-
 
 
 

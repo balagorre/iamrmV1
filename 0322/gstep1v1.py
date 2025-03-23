@@ -6,9 +6,11 @@ import json
 from botocore.exceptions import ClientError
 from textractcaller.t_call import call_textract, Textract_Features
 from textractprettyprinter.t_pretty_print import get_text_from_layout_json, get_tables_string, convert_table_to_list
+import logging
+from typing import List
+from difflib import SequenceMatcher  # For string similarity
 
 # Logging setup
-import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,46 @@ def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) ->
         logger.error(f"Error downloading from S3: {e}")
         return False
 
+def similar(a: str, b: str) -> float:
+    """Calculates the similarity ratio between two strings."""
+    return SequenceMatcher(None, a, b).ratio()
+
+def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> bool:
+    """
+    Determines if two tables should be merged based on heuristics.
+    """
+    if not table1 or not table2:
+        return False
+
+    if len(table1[0]) != len(table2[0]):
+        return False
+
+    last_row_table1 = " ".join(table1[-1]).lower()
+    first_row_table2 = " ".join(table2[0]).lower()
+
+    if similar(last_row_table1, first_row_table2) > 0.6:
+        return True
+
+    return False
+
+def merge_tables(tables: List[List[List[str]]]) -> List[List[List[str]]]:
+    """Merges tables that span multiple pages."""
+    merged_tables = []
+    if not tables:
+        return merged_tables
+
+    current_table = tables[0]
+    for next_table in tables[1:]:
+        if should_merge_tables(current_table, next_table):
+            current_table.extend(next_table[1:])
+        else:
+            merged_tables.append(current_table)
+            current_table = next_table
+    merged_tables.append(current_table)
+    return merged_tables
+
 def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:
-    """Extracts text and tables from a PDF, excluding headers/footers/page numbers."""
+    """Extracts text and tables, excluding headers/footers/page numbers, and merges tables."""
     try:
         logger.info(f"Extracting text from: {local_file_path}")
 
@@ -41,29 +81,26 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:
 
         print(f"Textract Response (truncated): {json.dumps(response)[:500]}")
 
-        # Exclude headers, footers, and page numbers
         text = get_text_from_layout_json(response,
-                                        exclude_header_footer=True,  # Exclude headers/footers
-                                        exclude_page_number=True)   # Exclude page numbers
+                                        exclude_header_footer=True,
+                                        exclude_page_number=True)
 
         tables = []
         try:
-            tables_string = get_tables_string(response)
             table_list = convert_table_to_list(response)
             if table_list:
                 tables = table_list
         except Exception as e:
             logger.warning(f"Error extracting tables: {e}")
 
-        return {'text': text, 'tables': tables, 'response': response} # Return raw response
+        merged_tables = merge_tables(tables)
+        return {'text': text, 'tables': merged_tables, 'response': response}
 
     except ClientError as e:
         logger.error(f"Textract ClientError: {e}")
-        traceback.print_exc()
         return {}
     except Exception as e:
         logger.error(f"Error extracting text/tables: {e}")
-        traceback.print_exc()
         return {}
 
 
@@ -84,8 +121,7 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
         os.makedirs(output_dir, exist_ok=True)
         base_filename = os.path.splitext(os.path.basename(object_key))[0]
         output_file_path = os.path.join(output_dir, f"{base_filename}_processed.json")
-        # Raw Textract JSON output path
-        raw_json_path = os.path.join(output_dir, f"{base_filename}_textract.json")
+        raw_json_path = os.path.join(output_dir, f"{base_filename}_textract.json") # Define raw_json_path
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             local_file_path = temp_file.name
@@ -99,15 +135,12 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
                 logger.error("No text was extracted.")
                 return False
 
-            # Save processed output (text and tables)
             save_processed_output({'text': extracted_data['text'], 'tables': extracted_data['tables']}, output_file_path)
 
-            # Save raw Textract JSON
-            with open(raw_json_path, 'w') as f:
+            with open(raw_json_path, 'w') as f: # Use raw_json_path here
                 json.dump(extracted_data['response'], f, indent=4)
             logger.info(f"Saved raw Textract JSON to: {raw_json_path}")
             return True
-
 
     except Exception as e:
         logger.error(f"Error processing document: {e}")

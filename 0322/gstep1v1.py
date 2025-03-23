@@ -23,26 +23,29 @@ def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) ->
         logger.error(f"Error downloading from S3: {e}")
         return False
 
-def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:  # Removed textract_client
-    """Extracts text and tables from a PDF using Textract."""
+def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:
+    """Extracts text and tables from a PDF, excluding headers/footers/page numbers."""
     try:
         logger.info(f"Extracting text from: {local_file_path}")
 
         with open(local_file_path, 'rb') as file:
             pdf_bytes = file.read()
 
-        response = call_textract(  # No textract_client here
+        response = call_textract(
             input_document=pdf_bytes,
             features=[Textract_Features.LAYOUT, Textract_Features.TABLES]
         )
-        # Check if the response is valid and contains 'Blocks'
         if not response or 'Blocks' not in response:
             logger.error(f"Invalid Textract response: {response}")
             return {}
 
         print(f"Textract Response (truncated): {json.dumps(response)[:500]}")
 
-        text = get_text_from_layout_json(response)
+        # Exclude headers, footers, and page numbers
+        text = get_text_from_layout_json(response,
+                                        exclude_header_footer=True,  # Exclude headers/footers
+                                        exclude_page_number=True)   # Exclude page numbers
+
         tables = []
         try:
             tables_string = get_tables_string(response)
@@ -52,7 +55,7 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:  # Removed t
         except Exception as e:
             logger.warning(f"Error extracting tables: {e}")
 
-        return {'text': text, 'tables': tables}
+        return {'text': text, 'tables': tables, 'response': response} # Return raw response
 
     except ClientError as e:
         logger.error(f"Textract ClientError: {e}")
@@ -65,7 +68,7 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:  # Removed t
 
 
 def save_processed_output(data: dict, output_file_path: str) -> None:
-    """Saves the processed text and tables to a JSON file."""
+    """Saves the processed output to a JSON file."""
     try:
         with open(output_file_path, 'w', encoding='utf-8') as outfile:
             json.dump(data, outfile, indent=4)
@@ -81,6 +84,8 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
         os.makedirs(output_dir, exist_ok=True)
         base_filename = os.path.splitext(os.path.basename(object_key))[0]
         output_file_path = os.path.join(output_dir, f"{base_filename}_processed.json")
+        # Raw Textract JSON output path
+        raw_json_path = os.path.join(output_dir, f"{base_filename}_textract.json")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             local_file_path = temp_file.name
@@ -88,15 +93,21 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
             if not download_s3_file(bucket_name, object_key, local_file_path):
                 return False
 
-            # textract_client = boto3.client('textract')  # No longer needed here
-            extracted_data = extract_text_and_tables_from_pdf(local_file_path) # Removed client
+            extracted_data = extract_text_and_tables_from_pdf(local_file_path)
 
             if not extracted_data or not extracted_data.get('text', '').strip():
                 logger.error("No text was extracted.")
                 return False
 
-            save_processed_output(extracted_data, output_file_path)
+            # Save processed output (text and tables)
+            save_processed_output({'text': extracted_data['text'], 'tables': extracted_data['tables']}, output_file_path)
+
+            # Save raw Textract JSON
+            with open(raw_json_path, 'w') as f:
+                json.dump(extracted_data['response'], f, indent=4)
+            logger.info(f"Saved raw Textract JSON to: {raw_json_path}")
             return True
+
 
     except Exception as e:
         logger.error(f"Error processing document: {e}")

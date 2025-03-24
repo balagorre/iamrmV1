@@ -7,18 +7,18 @@ from botocore.exceptions import ClientError
 from textractcaller.t_call import call_textract, Textract_Features
 from textractprettyprinter.t_pretty_print import get_text_from_layout_json, get_tables_string, convert_table_to_list
 import logging
-from typing import List, Dict  # Import Dict
+from typing import List, Dict
 from difflib import SequenceMatcher
 
 # --- Configuration ---
-SIMILARITY_THRESHOLD = 0.7  # Increased threshold slightly
+SIMILARITY_THRESHOLD = 0.7
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) -> bool:
-    """Downloads a file from S3, handling potential ClientErrors."""
+    """Downloads a file from S3."""
     try:
         s3_client = boto3.client('s3')
         s3_client.download_file(bucket_name, object_key, local_file_path)
@@ -28,28 +28,23 @@ def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) ->
         logger.error(f"Error downloading from S3: {e}")
         return False
     except Exception as e:
-        logger.exception(f"Unexpected error during S3 download: {e}")  # More specific logging
+        logger.exception(f"Unexpected error during S3 download: {e}")
         return False
 
 def similar(a: str, b: str) -> float:
-    """Calculates the similarity ratio between two strings, handling empty strings."""
-    if not a or not b:  # Handle empty strings gracefully
+    """Calculates the similarity ratio between two strings."""
+    if not a or not b:
         return 0.0
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio() # used lower()
-
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> bool:
-    """
-    Determines if two tables should be merged, with improved robustness.
-    """
+    """Determines if two tables should be merged."""
     if not table1 or not table2:
         return False
-    if not table1[0] or not table2[0]: # Added checks if not empty rows
+    if not table1[0] or not table2[0]:
         return False
     if len(table1[0]) != len(table2[0]):
         return False
-
-    # Handle cases where tables might not have enough rows for comparison
     if len(table1) < 1 or len(table2) < 1:
         return False
 
@@ -58,9 +53,8 @@ def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> boo
 
     return similar(last_row_table1, first_row_table2) >= SIMILARITY_THRESHOLD
 
-
 def merge_tables(tables: List[List[List[str]]]) -> List[List[List[str]]]:
-    """Merges tables with improved handling of edge cases."""
+    """Merges tables."""
     if not tables:
         return []
 
@@ -69,19 +63,19 @@ def merge_tables(tables: List[List[List[str]]]) -> List[List[List[str]]]:
 
     for next_table in tables[1:]:
         if should_merge_tables(current_table, next_table):
-            # Merge, skipping the header row of the *next* table *if* it exists
             if len(next_table) > 1:
                 current_table.extend(next_table[1:])
-            else:  # Handle case where next_table has only a header row
+            else:
                 current_table.extend(next_table)
         else:
             merged_tables.append(current_table)
             current_table = next_table
 
-    merged_tables.append(current_table)  # Don't forget the last table
+    merged_tables.append(current_table)
     return merged_tables
+
 def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
-    """Extracts text/tables, handles errors, merges tables, and returns a dictionary."""
+    """Extracts text/tables, handles errors, merges tables."""
     try:
         logger.info(f"Extracting text from: {local_file_path}")
 
@@ -95,7 +89,7 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
 
         if not response or 'Blocks' not in response:
             logger.error(f"Invalid Textract response: {response}")
-            return {}  # Return empty dict on error
+            return {}
 
         print(f"Textract Response (truncated): {json.dumps(response)[:500]}")
 
@@ -106,13 +100,16 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
             print("--- Attempting to extract tables ---")
             table_list = convert_table_to_list(response)
             print(f"Initial table_list: {table_list}")
-            if table_list:
+
+            # --- CRITICAL FIX: Check the type of table_list ---
+            if isinstance(table_list, list):
                 tables = table_list
                 print(f"Extracted {len(tables)} tables initially.")
             else:
-                print("No tables extracted by convert_table_to_list.")
+                print(f"convert_table_to_list returned unexpected type: {type(table_list)}")
+                logger.warning("Could not extract tables in expected format.")
         except Exception as e:
-            logger.exception(f"Error extracting tables: {e}")  # Use logger.exception
+            logger.exception(f"Error extracting tables: {e}")
             print("--- Table extraction failed ---")
 
         merged_tables = merge_tables(tables)
@@ -121,23 +118,23 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
         return {'text': text, 'tables': merged_tables, 'response': response}
 
     except ClientError as e:
-        logger.exception(f"Textract ClientError: {e}")  # Use logger.exception
+        logger.exception(f"Textract ClientError: {e}")
         return {}
     except Exception as e:
-        logger.exception(f"Error extracting text/tables: {e}")  # Use logger.exception
+        logger.exception(f"Error extracting text/tables: {e}")
         return {}
 
 def save_processed_output(data: Dict, output_file_path: str) -> None:
-    """Saves processed output to JSON, handling potential errors."""
+    """Saves processed output to JSON."""
     try:
         with open(output_file_path, 'w', encoding='utf-8') as outfile:
             json.dump(data, outfile, indent=4)
         logger.info(f"Saved processed output to {output_file_path}")
     except Exception as e:
-        logger.exception(f"Error saving output: {e}")  # Use logger.exception
+        logger.exception(f"Error saving output: {e}")
 
 def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> bool:
-    """Downloads PDF, extracts data, saves output, with robust error handling."""
+    """Downloads PDF, extracts data, saves output."""
     local_file_path = None
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -156,9 +153,8 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
             if not extracted_data or 'text' not in extracted_data or not extracted_data['text'].strip():
                 logger.error("No text was extracted.")
                 return False
-            # Save even if tables are empty
-            save_processed_output({'text': extracted_data['text'], 'tables': extracted_data['tables']}, output_file_path)
 
+            save_processed_output({'text': extracted_data['text'], 'tables': extracted_data['tables']}, output_file_path)
 
             with open(raw_json_path, 'w') as f:
                 json.dump(extracted_data['response'], f, indent=4)
@@ -166,7 +162,7 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
             return True
 
     except Exception as e:
-        logger.exception(f"Error processing document: {e}")  # Use logger.exception
+        logger.exception(f"Error processing document: {e}")
         return False
 
     finally:

@@ -179,28 +179,40 @@ if __name__ == "__main__":
 
 
 import json
+import argparse
 from semantic_search import search_index
 import boto3
 
-# Claude Model ID
+# Claude 3 Sonnet Bedrock Model ID
 CLAUDE_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 # === Build Claude Prompt ===
-def build_claude_prompt(question: str, context_chunks: list) -> str:
-    prompt = (
-        "You are a document analysis assistant.\n"
-        "Based on the extracted content below, answer the user’s question.\n\n"
-        "Context:\n"
-    )
+def build_claude_prompt(question: str, context_chunks: list, mode: str = "summary") -> str:
+    if mode == "raw":
+        prompt = (
+            "You are a document assistant.\n"
+            "Your task is to return the exact content from the document that answers the user’s question.\n"
+            "Use only the matching chunks from the context below. Do not summarize, paraphrase, or interpret.\n\n"
+            f"User Question: {question}\n\n"
+            "Context:\n"
+        )
+        for i, chunk in enumerate(context_chunks):
+            prompt += f"Chunk {i+1}:\n{chunk}\n\n"
+        prompt += "Return only the relevant original document text. If nothing matches, respond with 'Not found.'"
+    else:  # summary mode
+        prompt = (
+            "You are a helpful assistant analyzing a document.\n"
+            "Based on the context below, answer the user’s question clearly and concisely.\n\n"
+            f"User Question: {question}\n\n"
+            "Context:\n"
+        )
+        for i, chunk in enumerate(context_chunks):
+            prompt += f"Chunk {i+1}:\n{chunk}\n\n"
+        prompt += "Answer in plain English. If not found, say 'Not found.'"
 
-    for i, chunk in enumerate(context_chunks):
-        prompt += f"Chunk {i+1}:\n{chunk}\n\n"
-
-    prompt += f"User Question: {question}\n\n"
-    prompt += "Answer clearly and concisely. If the answer is not found, reply 'Not found.'"
     return prompt
 
-# === Claude Bedrock Call ===
+# === Call Claude via Bedrock ===
 def query_claude(prompt: str) -> str:
     bedrock = boto3.client("bedrock-runtime")
 
@@ -209,9 +221,7 @@ def query_claude(prompt: str) -> str:
         contentType="application/json",
         accept="application/json",
         body=json.dumps({
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 1000,
             "temperature": 0.2
         })
@@ -220,28 +230,35 @@ def query_claude(prompt: str) -> str:
     body = json.loads(response['body'].read())
     return body['content'][0]['text']
 
-# === Main Q&A Function ===
-def ask_question(question: str, top_k: int = 5):
-    print(f"🔍 Searching document for: {question}")
+# === Main Q&A function ===
+def ask_question(question: str, mode: str = "summary", top_k: int = 5):
+    print(f"\n🔍 Searching document for: {question}")
     chunks = search_index(question, top_k=top_k)
 
-    print("🧠 Sending context to Claude...")
-    prompt = build_claude_prompt(question, chunks)
+    if not chunks:
+        print("No relevant chunks found.")
+        return
+
+    print(f"🧠 Sending context to Claude in '{mode}' mode...")
+    prompt = build_claude_prompt(question, chunks, mode)
     answer = query_claude(prompt)
 
     print("\n=== Claude's Answer ===")
     print(answer)
 
-# === Run as CLI ===
+# === CLI Interface ===
 if __name__ == "__main__":
-    print("Claude Document Q&A Assistant")
+    parser = argparse.ArgumentParser(description="Document Q&A with Claude and FAISS")
+    parser.add_argument("--mode", choices=["raw", "summary"], default="summary",
+                        help="Use 'raw' for exact extracts, 'summary' for natural answers.")
+    args = parser.parse_args()
+
+    print("=== Claude-Powered Document Q&A ===")
+    print(f"Answer mode: {args.mode.upper()} (type 'exit' to quit)")
+
     while True:
-        q = input("\nAsk a question (or 'exit'): ")
-        if q.lower() in ["exit", "quit"]:
+        question = input("\nAsk a question: ")
+        if question.lower().strip() in ["exit", "quit"]:
+            print("Goodbye!")
             break
-        ask_question(q)
-
-
-
-
-
+        ask_question(question, mode=args.mode)

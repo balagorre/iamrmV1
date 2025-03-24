@@ -3,20 +3,21 @@ import os
 import json
 import time
 from botocore.exceptions import ClientError
+from textractcaller.t_call import call_textract, Textract_Features
+from textractprettyprinter.t_pretty_print import get_text_from_layout_json, get_tables_string, convert_table_to_list
 import logging
 from tqdm import tqdm
+from typing import List, Dict
 
 # --- Configuration ---
 OUTPUT_DIR = 'extracted_output'
-POLL_INTERVAL = 5  # Seconds to wait between polling Textract
-MAX_WAIT_TIME = 1800 # Seconds (30 minutes) - Maximum time to wait for Textract
+POLL_INTERVAL = 5
+MAX_WAIT_TIME = 1800
 
-# Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) -> bool:
-    """Downloads a file from S3 (no changes)."""
     try:
         s3_client = boto3.client('s3')
         s3_client.download_file(bucket_name, object_key, local_file_path)
@@ -30,7 +31,6 @@ def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) ->
         return False
 
 def start_textract_job(bucket_name: str, object_key: str, features: list) -> str | None:
-    """Starts an asynchronous Textract job."""
     try:
         textract_client = boto3.client('textract')
         response = textract_client.start_document_analysis(
@@ -48,13 +48,10 @@ def start_textract_job(bucket_name: str, object_key: str, features: list) -> str
         return None
 
 def get_textract_results(job_id: str) -> List[Dict]:
-    """Retrieves results from a Textract job, handling pagination."""
     try:
         textract_client = boto3.client('textract')
         response = textract_client.get_document_analysis(JobId=job_id)
         results = [response]
-
-        # Handle pagination
         while 'NextToken' in response:
             next_token = response['NextToken']
             response = textract_client.get_document_analysis(JobId=job_id, NextToken=next_token)
@@ -68,15 +65,14 @@ def get_textract_results(job_id: str) -> List[Dict]:
          return []
 
 def wait_for_textract_job(job_id: str) -> str:
-    """Waits for a Textract job to complete, with polling and timeout."""
     start_time = time.time()
     with tqdm(total=None, desc=f"Waiting for Textract job {job_id}", unit="s", disable=False) as pbar:
         while True:
             results = get_textract_results(job_id)
-            if not results:  # Check if result is valid
+            if not results:
                 return "FAILED"
-            status = results[0]['JobStatus']  # Status is in the first response
-            pbar.set_postfix({"status": status})  # Update status in progress bar
+            status = results[0]['JobStatus']
+            pbar.set_postfix({"status": status})
 
             if status in ('SUCCEEDED', 'FAILED', 'PARTIAL_SUCCESS'):
                 return status
@@ -86,14 +82,62 @@ def wait_for_textract_job(job_id: str) -> str:
                 return "TIMED_OUT"
 
             time.sleep(POLL_INTERVAL)
-            pbar.update(POLL_INTERVAL)  # Increment progress bar by poll interval
+            pbar.update(POLL_INTERVAL)
 
 
+def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
+    """Extracts text/tables, handles errors, merges tables."""
+    try:
+        logger.info(f"Extracting text from: {local_file_path}")
+
+        with open(local_file_path, 'rb') as file:
+            pdf_bytes = file.read()
+
+        # Explicitly enable both LAYOUT and TABLES
+        features = [Textract_Features.LAYOUT, Textract_Features.TABLES]
+        response = call_textract(
+            input_document=pdf_bytes,
+            features=features,
+            #  Force TABLES processing even with LAYOUT
+            override_config={'TABLES': {'FeatureTypes': ['TABLES']}} # CRUCIAL CHANGE
+        )
+
+        if not response or 'Blocks' not in response:
+            logger.error(f"Invalid Textract response: {response}")
+            return {}
+
+        print(f"Textract Response (truncated): {json.dumps(response)[:500]}")
+
+        text = get_text_from_layout_json(response, exclude_header_footer=True, exclude_page_number=True)
+
+        tables = []
+        try:
+            print("--- Attempting to extract tables ---")
+            table_list = convert_table_to_list(response)
+            print(f"Initial table_list: {table_list}")
+
+            if isinstance(table_list, list):
+                tables = table_list
+                print(f"Extracted {len(tables)} tables initially.")
+            else:
+                print(f"convert_table_to_list returned unexpected type: {type(table_list)}")
+                logger.warning("Could not extract tables in expected format.")
+        except Exception as e:
+            logger.exception(f"Error extracting tables: {e}")
+            print("--- Table extraction failed ---")
+
+        merged_tables = merge_tables(tables)
+        print(f"Merged tables: {merged_tables}")
+
+        return {'text': text, 'tables': merged_tables, 'response': response}
+
+    except ClientError as e:
+        logger.exception(f"Textract ClientError: {e}")
+        return {}
+    except Exception as e:
+        logger.exception(f"Error extracting text/tables: {e}")
+        return {}
 def run_textract_job_async(bucket_name: str, object_key: str, output_dir: str = OUTPUT_DIR) -> str | None:
-    """
-    Downloads a PDF, runs Textract *asynchronously*, saves the raw JSON.
-    Returns path to JSON file, or None on failure.
-    """
     try:
         os.makedirs(output_dir, exist_ok=True)
         base_filename = os.path.splitext(os.path.basename(object_key))[0]
@@ -102,35 +146,25 @@ def run_textract_job_async(bucket_name: str, object_key: str, output_dir: str = 
 
         if not download_s3_file(bucket_name, object_key, temp_pdf_path):
             return None
-
-        # Start the asynchronous Textract job
-        job_id = start_textract_job(bucket_name, object_key, ["LAYOUT", "TABLES"])  # Use object key
+        job_id = start_textract_job(bucket_name, object_key, ["LAYOUT", "TABLES"])
         if not job_id:
             return None
 
         logger.info(f"Started Textract job: {job_id}")
-
-        # Wait for the job to complete
         status = wait_for_textract_job(job_id)
         if status != "SUCCEEDED":
             logger.error(f"Textract job failed with status: {status}")
             return None
-
-        # Get the results (handling pagination)
         results = get_textract_results(job_id)
         if not results:
              return None
-
-        # Combine paginated results into a single JSON structure
         combined_response = {
-            'DocumentMetadata': results[0]['DocumentMetadata'], #Keep first page metadata
+            'DocumentMetadata': results[0]['DocumentMetadata'],
             'Blocks': []
              }
         for result_page in results:
             combined_response['Blocks'].extend(result_page['Blocks'])
 
-
-        # Save the combined raw JSON
         with open(json_path, 'w') as f:
             json.dump(combined_response, f, indent=4)
         logger.info(f"Saved raw Textract JSON to: {json_path}")
@@ -140,7 +174,7 @@ def run_textract_job_async(bucket_name: str, object_key: str, output_dir: str = 
     except Exception as e:
         logger.exception(f"Error in run_textract_job_async: {e}")
         return None
-    finally: # Clean up pdf
+    finally:
         if os.path.exists(temp_pdf_path):
             os.remove(temp_pdf_path)
             logger.info(f"Deleted temp file: {temp_pdf_path}")

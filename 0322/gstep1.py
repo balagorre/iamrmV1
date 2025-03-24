@@ -133,5 +133,24 @@ def run_textract_job_async(bucket_name: str, object_key: str, output_dir: str = 
             os.remove(temp_pdf_path)
             logger.info(f"Deleted temp file: {temp_pdf_path}")
 
+if __name__ == "__main__":
+    bucket_name = "your-s3-bucket-name"  # REPLACE
+    object_key_whitepaper = "path/to/your/whitepaper.pdf"  # REPLACE
+    output_dir = "extracted_output"
 
+    json_path = extractor.run_textract_job_async(bucket_name, object_key_whitepaper, output_dir)
 
+    if json_path:
+        # Use the Claude-based processor with chunking:
+        # (No changes needed here - driver.py already uses the correct processor)
+        tables = processor.extract_tables_with_claude(json_path) #, chunk_size=500) Removed chunk_size
+        if tables:
+            base_filename = os.path.splitext(os.path.basename(json_path))[0]
+            base_filename = base_filename.replace("_textract","")
+            processor.save_tables_to_files(tables, output_dir, base_filename)
+            print(f"Extracted tables saved to: {output_dir}")
+        else:
+            print("No tables extracted by Claude.")
+
+    else:
+        logger.error("Textract job failed.")

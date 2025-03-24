@@ -1,92 +1,125 @@
 import boto3
+import time
 import json
-import re
 import logging
-from textractcaller.t_call import call_textract, Textract_Features
-from textractprettyprinter.t_pretty_print import get_text_from_layout_json, convert_table_to_list
+from typing import List
+import pandas as pd
+from textractprettyprinter.t_pretty_print import convert_table_to_list
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def call_textract_with_bytes(bucket: str, key: str) -> dict:
-    """Downloads the S3 PDF into memory and calls Textract with LAYOUT + TABLES."""
-    try:
-        s3 = boto3.client("s3")
-        textract = boto3.client("textract")
+# === Step 1: Start Textract Async Job ===
+def start_textract_analysis(bucket: str, key: str) -> str:
+    textract = boto3.client("textract")
+    response = textract.start_document_analysis(
+        DocumentLocation={"S3Object": {"Bucket": bucket, "Name": key}},
+        FeatureTypes=["TABLES", "LAYOUT"]
+    )
+    job_id = response["JobId"]
+    logger.info(f"Started Textract job: {job_id}")
+    return job_id
 
-        logger.info(f"Downloading s3://{bucket}/{key}")
-        obj = s3.get_object(Bucket=bucket, Key=key)
-        file_bytes = obj['Body'].read()
+# === Step 2: Wait for Job Completion ===
+def wait_for_completion(job_id: str) -> str:
+    textract = boto3.client("textract")
+    while True:
+        response = textract.get_document_analysis(JobId=job_id)
+        status = response["JobStatus"]
+        logger.info(f"Job status: {status}")
+        if status in ["SUCCEEDED", "FAILED"]:
+            return status
+        time.sleep(5)
 
-        logger.info("Calling Textract with LAYOUT and TABLES features (bytes mode)")
-        response = call_textract(
-            input_document=file_bytes,
-            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
-            boto3_textract_client=textract
-        )
+# === Step 3: Get All Textract Blocks ===
+def get_all_blocks(job_id: str) -> List[dict]:
+    textract = boto3.client("textract")
+    blocks = []
+    next_token = None
 
-        if not response or 'Blocks' not in response:
-            raise ValueError("Empty or invalid Textract response.")
+    while True:
+        kwargs = {"JobId": job_id}
+        if next_token:
+            kwargs["NextToken"] = next_token
 
-        return response
+        response = textract.get_document_analysis(**kwargs)
+        blocks.extend(response["Blocks"])
+        next_token = response.get("NextToken")
 
-    except Exception as e:
-        logger.exception(f"Textract call failed: {e}")
-        raise
+        if not next_token:
+            break
 
-def extract_text(textract_response: dict) -> str:
-    """Extracts and cleans text from Textract response."""
-    try:
-        blocks = textract_response.get("Blocks", [])
-        text = get_text_from_layout_json(
-            textract_json={"Blocks": blocks},
-            exclude_page_header=True,
-            exclude_page_footer=True,
-            exclude_page_number=True
-        )
-        return re.sub(r'\s+', ' ', text).strip()
-    except Exception as e:
-        logger.exception("Failed to extract text")
-        return ""
+    return blocks
 
-def extract_tables(textract_response: dict) -> list:
-    """Extracts tables, returns [] on failure."""
-    try:
-        tables = convert_table_to_list(textract_response)
-        return tables if isinstance(tables, list) else []
-    except Exception as e:
-        logger.warning("Table extraction failed")
+# === Step 4: Find Tables After a Section Heading ===
+def find_tables_after_section(blocks: List[dict], section_title: str) -> List[List[List[str]]]:
+    section_found = False
+    extracted_tables = []
+    current_table = []
+
+    for block in blocks:
+        if block["BlockType"] == "LINE":
+            text = block.get("Text", "").strip().lower()
+            if section_title.lower() in text:
+                section_found = True
+
+        elif block["BlockType"] == "TABLE" and section_found:
+            # Optional: You could filter by page here too
+            current_table.append(block)
+
+    if not current_table:
+        logger.warning(f"No tables found after section: {section_title}")
         return []
 
-def save_output(data: dict, path: str):
+    # Convert using textractprettyprinter (entire document)
+    full_tables = convert_table_to_list({"Blocks": blocks})
+
+    # Return all tables after section
+    return full_tables[len(full_tables) - len(current_table):]
+
+# === Step 5: Convert to DataFrames ===
+def tables_to_dataframes(tables: List[List[List[str]]]) -> List[pd.DataFrame]:
+    dfs = []
+    for table in tables:
+        if not table or not table[0]: continue  # Skip empty
+        df = pd.DataFrame(table[1:], columns=table[0])
+        dfs.append(df)
+    return dfs
+
+# === Step 6: Save to JSON for review ===
+def save_json(data, path):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
     logger.info(f"Saved output to {path}")
 
-def process_s3_pdf(bucket: str, key: str, output_path: str):
-    try:
-        response = call_textract_with_bytes(bucket, key)
-        text = extract_text(response)
-        tables = extract_tables(response)
+# === Main Entry Point ===
+def process_pdf_section_tables(bucket: str, key: str, section_title: str, output_path: str) -> List[pd.DataFrame]:
+    job_id = start_textract_analysis(bucket, key)
+    status = wait_for_completion(job_id)
 
-        save_output({
-            "text": text,
-            "tables": tables
-        }, output_path)
+    if status != "SUCCEEDED":
+        logger.error("Textract job failed.")
+        return []
 
-        logger.info("✅ PDF processed successfully.")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Processing failed: {e}")
-        return False
+    blocks = get_all_blocks(job_id)
 
-# ---- Runner ----
+    # Optional: Save full response
+    save_json({"Blocks": blocks}, output_path)
+
+    tables = find_tables_after_section(blocks, section_title)
+    dataframes = tables_to_dataframes(tables)
+
+    logger.info(f"Found {len(dataframes)} table(s) under section: '{section_title}'")
+    return dataframes
+
+# === Example Runner ===
 if __name__ == "__main__":
-    import os
+    bucket_name = "your-s3-bucket-name"
+    object_key = "path/to/your/largefile.pdf"
+    section_to_find = "Input Data"
+    output_json = "textract_output.json"
 
-    bucket = os.getenv("BUCKET_NAME", "your-s3-bucket-name")
-    key = os.getenv("OBJECT_KEY", "your/path/to.pdf")
-    output_path = os.getenv("OUTPUT_PATH", "output.json")
+    dfs = process_pdf_section_tables(bucket_name, object_key, section_to_find, output_json)
 
-    process_s3_pdf(bucket, key, output_path)
+    for i, df in enumerate(dfs):
+        print(f"\n📄 Table {i+1}:\n", df)

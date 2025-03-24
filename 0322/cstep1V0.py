@@ -12,32 +12,25 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def call_textract_with_s3_url(bucket_name: str, object_key: str) -> dict:
-    try:
-        textract_client = boto3.client('textract')
+import boto3
 
-        logger.info(f"Calling Textract on s3://{bucket_name}/{object_key} with LAYOUT and TABLES features")
+def call_textract_with_s3_bytes(bucket: str, key: str) -> dict:
+    s3_client = boto3.client('s3')
+    textract_client = boto3.client('textract')
 
-        response = call_textract(
-            input_document={
-                "S3Object": {
-                    "Bucket": bucket_name,
-                    "Name": object_key
-                }
-            },
-            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
-            boto3_textract_client=textract_client,
-        )
+    # Get PDF bytes
+    s3_object = s3_client.get_object(Bucket=bucket, Key=key)
+    pdf_bytes = s3_object['Body'].read()
 
-        if not response or "Blocks" not in response:
-            raise ValueError("Textract response is empty or missing 'Blocks'.")
+    # Call Textract with bytes
+    response = call_textract(
+        input_document=pdf_bytes,
+        features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
+        boto3_textract_client=textract_client,
+    )
 
-        logger.info("Textract call successful.")
-        return response
+    return response
 
-    except Exception as e:
-        logger.exception(f"Textract call failed: {e}")
-        raise
 
 
 

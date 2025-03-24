@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError
 from textractcaller.t_call import call_textract, Textract_Features
 from textractprettyprinter.t_pretty_print import get_text_from_layout_json, get_tables_string, convert_table_to_list
 import logging
-from typing import List, Dict
+from typing import List, Dict, Union, Any
 from difflib import SequenceMatcher
 
 # --- Configuration ---
@@ -39,6 +39,8 @@ def similar(a: str, b: str) -> float:
 
 def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> bool:
     """Determines if two tables should be merged."""
+    if not isinstance(table1, list) or not isinstance(table2, list):
+        return False  # Not lists, can't merge
     if not table1 or not table2:
         return False
     if not table1[0] or not table2[0]:
@@ -54,24 +56,30 @@ def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> boo
     return similar(last_row_table1, first_row_table2) >= SIMILARITY_THRESHOLD
 
 def merge_tables(tables: List[List[List[str]]]) -> List[List[List[str]]]:
-    """Merges tables."""
-    if not tables:
-        return []
+    """Merges tables, handling potential non-list inputs."""
+    if not isinstance(tables, list):
+        logger.warning(f"merge_tables received unexpected input type: {type(tables)}. Returning empty list.")
+        return []  # Return empty list if input is not a list
 
     merged_tables: List[List[List[str]]] = []
-    current_table = tables[0]
+    if not tables:
+        return merged_tables
 
+    current_table = tables[0]
     for next_table in tables[1:]:
         if should_merge_tables(current_table, next_table):
-            if len(next_table) > 1:
-                current_table.extend(next_table[1:])
-            else:
-                current_table.extend(next_table)
+            if isinstance(current_table, list) and isinstance(next_table, list): #Added check
+                if len(next_table) > 1:
+                    current_table.extend(next_table[1:])
+                else:
+                    current_table.extend(next_table)
         else:
-            merged_tables.append(current_table)
+            if isinstance(current_table,list): #Added Check
+                merged_tables.append(current_table)
             current_table = next_table
 
-    merged_tables.append(current_table)
+    if isinstance(current_table,list): #Added check
+        merged_tables.append(current_table)
     return merged_tables
 
 def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
@@ -101,7 +109,6 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
             table_list = convert_table_to_list(response)
             print(f"Initial table_list: {table_list}")
 
-            # --- CRITICAL FIX: Check the type of table_list ---
             if isinstance(table_list, list):
                 tables = table_list
                 print(f"Extracted {len(tables)} tables initially.")
@@ -112,7 +119,7 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
             logger.exception(f"Error extracting tables: {e}")
             print("--- Table extraction failed ---")
 
-        merged_tables = merge_tables(tables)
+        merged_tables = merge_tables(tables)  # Pass potentially empty 'tables'
         print(f"Merged tables: {merged_tables}")
 
         return {'text': text, 'tables': merged_tables, 'response': response}
@@ -123,7 +130,6 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
     except Exception as e:
         logger.exception(f"Error extracting text/tables: {e}")
         return {}
-
 def save_processed_output(data: Dict, output_file_path: str) -> None:
     """Saves processed output to JSON."""
     try:
@@ -150,7 +156,8 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
 
             extracted_data = extract_text_and_tables_from_pdf(local_file_path)
 
-            if not extracted_data or 'text' not in extracted_data or not extracted_data['text'].strip():
+            # Corrected 'if' condition:
+            if not extracted_data or 'text' not in extracted_data or not extracted_data.get('text','').strip():
                 logger.error("No text was extracted.")
                 return False
 
@@ -171,8 +178,8 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
             logger.info(f"Deleted temp file: {local_file_path}")
 
 if __name__ == "__main__":
-    bucket_name = "your-s3-bucket-name"  # Replace
-    object_key_whitepaper = "path/to/your/whitepaper.pdf"  # Replace
+    bucket_name = "your-s3-bucket-name"
+    object_key_whitepaper = "path/to/your/whitepaper.pdf"
     output_dir = "extracted_output"
 
     success_whitepaper = extract_from_s3_pdf(bucket_name, object_key_whitepaper, output_dir)

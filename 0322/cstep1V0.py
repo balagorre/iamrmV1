@@ -13,16 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 def call_textract_with_s3_url(bucket_name: str, object_key: str) -> dict:
-    """
-    Calls Amazon Textract using an S3 object URL with LAYOUT and TABLES features.
-    """
     try:
         textract_client = boto3.client('textract')
-        s3_object_url = f"s3://{bucket_name}/{object_key}"
-        logger.info(f"Calling Textract on: {s3_object_url}")
+
+        logger.info(f"Calling Textract on s3://{bucket_name}/{object_key} with LAYOUT and TABLES features")
 
         response = call_textract(
-            input_document=s3_object_url,
+            input_document={
+                "S3Object": {
+                    "Bucket": bucket_name,
+                    "Name": object_key
+                }
+            },
             features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
             boto3_textract_client=textract_client,
         )
@@ -33,12 +35,10 @@ def call_textract_with_s3_url(bucket_name: str, object_key: str) -> dict:
         logger.info("Textract call successful.")
         return response
 
-    except ClientError as e:
-        logger.exception("ClientError during Textract call.")
-        raise
     except Exception as e:
-        logger.exception(f"Unexpected error calling Textract: {e}")
+        logger.exception(f"Textract call failed: {e}")
         raise
+
 
 
 def filter_low_confidence_blocks(blocks: list, threshold: float = 85.0) -> list:

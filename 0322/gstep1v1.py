@@ -1,189 +1,140 @@
 import boto3
-import tempfile
-import os
-import traceback
+import io
 import json
 from botocore.exceptions import ClientError
 from textractcaller.t_call import call_textract, Textract_Features
-from textractprettyprinter.t_pretty_print import get_text_from_layout_json, get_tables_string, convert_table_to_list
+from textractprettyprinter.t_pretty_print import get_text_from_layout_json
+from textractresponseparser import response_parser
 import logging
-from typing import List, Dict, Union, Any
-from difflib import SequenceMatcher
-
-# --- Configuration ---
-SIMILARITY_THRESHOLD = 0.7
+from typing import Dict
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def download_s3_file(bucket_name: str, object_key: str, local_file_path: str) -> bool:
-    """Downloads a file from S3."""
+def download_s3_file_to_memory(bucket_name: str, object_key: str) -> io.BytesIO:
+    """
+    Downloads a file from S3 into an in-memory BytesIO object.
+
+    Args:
+        bucket_name (str): The S3 bucket name.
+        object_key (str): The S3 object key.
+
+    Returns:
+        io.BytesIO: The file content as an in-memory bytes object.
+    """
     try:
         s3_client = boto3.client('s3')
-        s3_client.download_file(bucket_name, object_key, local_file_path)
-        logger.info(f"Downloaded s3://{bucket_name}/{object_key} to {local_file_path}")
-        return True
+        file_stream = io.BytesIO()
+        s3_client.download_fileobj(bucket_name, object_key, file_stream)
+        file_stream.seek(0)  # Reset stream position
+        logger.info(f"Downloaded s3://{bucket_name}/{object_key} into memory.")
+        return file_stream
     except ClientError as e:
         logger.error(f"Error downloading from S3: {e}")
-        return False
-    except Exception as e:
-        logger.exception(f"Unexpected error during S3 download: {e}")
-        return False
+        raise Exception(f"Failed to download file from S3: {e}")
 
-def similar(a: str, b: str) -> float:
-    """Calculates the similarity ratio between two strings."""
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+def extract_text_and_tables(textract_response: Dict) -> Dict:
+    """
+    Extracts text and tables from a Textract response.
 
-def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> bool:
-    """Determines if two tables should be merged."""
-    if not isinstance(table1, list) or not isinstance(table2, list):
-        return False  # Not lists, can't merge
-    if not table1 or not table2:
-        return False
-    if not table1[0] or not table2[0]:
-        return False
-    if len(table1[0]) != len(table2[0]):
-        return False
-    if len(table1) < 1 or len(table2) < 1:
-        return False
+    Args:
+        textract_response (Dict): The JSON response from Amazon Textract.
 
-    last_row_table1 = " ".join(table1[-1])
-    first_row_table2 = " ".join(table2[0])
-
-    return similar(last_row_table1, first_row_table2) >= SIMILARITY_THRESHOLD
-
-def merge_tables(tables: List[List[List[str]]]) -> List[List[List[str]]]:
-    """Merges tables, handling potential non-list inputs."""
-    if not isinstance(tables, list):
-        logger.warning(f"merge_tables received unexpected input type: {type(tables)}. Returning empty list.")
-        return []  # Return empty list if input is not a list
-
-    merged_tables: List[List[List[str]]] = []
-    if not tables:
-        return merged_tables
-
-    current_table = tables[0]
-    for next_table in tables[1:]:
-        if should_merge_tables(current_table, next_table):
-            if isinstance(current_table, list) and isinstance(next_table, list): #Added check
-                if len(next_table) > 1:
-                    current_table.extend(next_table[1:])
-                else:
-                    current_table.extend(next_table)
-        else:
-            if isinstance(current_table,list): #Added Check
-                merged_tables.append(current_table)
-            current_table = next_table
-
-    if isinstance(current_table,list): #Added check
-        merged_tables.append(current_table)
-    return merged_tables
-
-def extract_text_and_tables_from_pdf(local_file_path: str) -> Dict:
-    """Extracts text/tables, handles errors, merges tables."""
+    Returns:
+        Dict: A dictionary containing extracted text and tables.
+    """
     try:
-        logger.info(f"Extracting text from: {local_file_path}")
+        # Validate Textract response structure
+        if not textract_response or 'Blocks' not in textract_response:
+            raise ValueError("Invalid Textract response: Missing 'Blocks'.")
 
-        with open(local_file_path, 'rb') as file:
-            pdf_bytes = file.read()
-
-        response = call_textract(
-            input_document=pdf_bytes,
-            features=[Textract_Features.LAYOUT, Textract_Features.TABLES]
+        # Extract text using pretty printer
+        extracted_text = get_text_from_layout_json(
+            textract_json=textract_response,
+            exclude_page_header=True,
+            exclude_page_footer=True,
+            exclude_page_number=True,
         )
 
-        if not response or 'Blocks' not in response:
-            logger.error(f"Invalid Textract response: {response}")
-            return {}
+        # Extract tables using amazon-textract-response-parser
+        parser = response_parser.TextractResponseParser(textract_response)
+        extracted_tables = parser.get_all_tables_as_list()
 
-        print(f"Textract Response (truncated): {json.dumps(response)[:500]}")
-
-        text = get_text_from_layout_json(response, exclude_header_footer=True, exclude_page_number=True)
-
-        tables = []
-        try:
-            print("--- Attempting to extract tables ---")
-            table_list = convert_table_to_list(response)
-            print(f"Initial table_list: {table_list}")
-
-            if isinstance(table_list, list):
-                tables = table_list
-                print(f"Extracted {len(tables)} tables initially.")
-            else:
-                print(f"convert_table_to_list returned unexpected type: {type(table_list)}")
-                logger.warning("Could not extract tables in expected format.")
-        except Exception as e:
-            logger.exception(f"Error extracting tables: {e}")
-            print("--- Table extraction failed ---")
-
-        merged_tables = merge_tables(tables)  # Pass potentially empty 'tables'
-        print(f"Merged tables: {merged_tables}")
-
-        return {'text': text, 'tables': merged_tables, 'response': response}
-
-    except ClientError as e:
-        logger.exception(f"Textract ClientError: {e}")
-        return {}
+        logger.info(f"Extracted {len(extracted_tables)} tables.")
+        return {"text": extracted_text.strip(), "tables": extracted_tables}
     except Exception as e:
-        logger.exception(f"Error extracting text/tables: {e}")
-        return {}
-def save_processed_output(data: Dict, output_file_path: str) -> None:
-    """Saves processed output to JSON."""
+        logger.error(f"Error extracting text/tables: {e}")
+        raise
+
+def save_output_to_file(data: Dict, output_file_path: str) -> None:
+    """
+    Saves extracted data to a JSON file.
+
+    Args:
+        data (Dict): The extracted data.
+        output_file_path (str): Path to save the JSON file.
+    """
     try:
         with open(output_file_path, 'w', encoding='utf-8') as outfile:
             json.dump(data, outfile, indent=4)
-        logger.info(f"Saved processed output to {output_file_path}")
+        logger.info(f"Saved output to {output_file_path}")
     except Exception as e:
-        logger.exception(f"Error saving output: {e}")
+        logger.error(f"Error saving output: {e}")
+        raise
 
-def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> bool:
-    """Downloads PDF, extracts data, saves output."""
-    local_file_path = None
+def process_pdf_from_s3(bucket_name: str, object_key: str, output_file_path: str) -> bool:
+    """
+    Downloads a PDF from S3, extracts text and tables using Amazon Textract,
+    and saves the processed data to a local JSON file.
+
+    Args:
+        bucket_name (str): The S3 bucket name.
+        object_key (str): The S3 object key.
+        output_file_path (str): Path to save the processed JSON output.
+
+    Returns:
+        bool: True if processing is successful, False otherwise.
+    """
     try:
-        os.makedirs(output_dir, exist_ok=True)
-        base_filename = os.path.splitext(os.path.basename(object_key))[0]
-        output_file_path = os.path.join(output_dir, f"{base_filename}_processed.json")
-        raw_json_path = os.path.join(output_dir, f"{base_filename}_textract.json")
+        # Step 1: Download PDF from S3 into memory
+        pdf_stream = download_s3_file_to_memory(bucket_name, object_key)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-            local_file_path = temp_file.name
+        # Step 2: Call Amazon Textract for text and table extraction
+        textract_client = boto3.client('textract')
+        textract_response = call_textract(
+            input_document=pdf_stream.getvalue(),
+            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
+            textract_client=textract_client,
+            # Uncomment below if needed for specific configurations
+            # LanguageCode='en',
+            # OrientationCorrection='ROTATE_0'
+        )
 
-            if not download_s3_file(bucket_name, object_key, local_file_path):
-                return False
+        # Step 3: Extract text and tables from the Textract response
+        extracted_data = extract_text_and_tables(textract_response)
 
-            extracted_data = extract_text_and_tables_from_pdf(local_file_path)
+        # Validate extracted data before saving
+        if not extracted_data.get("text") or not isinstance(extracted_data["tables"], list):
+            raise ValueError("Extracted data is invalid.")
 
-            # Corrected 'if' condition:
-            if not extracted_data or 'text' not in extracted_data or not extracted_data.get('text','').strip():
-                logger.error("No text was extracted.")
-                return False
+        # Step 4: Save the processed output locally
+        save_output_to_file(extracted_data, output_file_path)
 
-            save_processed_output({'text': extracted_data['text'], 'tables': extracted_data['tables']}, output_file_path)
-
-            with open(raw_json_path, 'w') as f:
-                json.dump(extracted_data['response'], f, indent=4)
-            logger.info(f"Saved raw Textract JSON to: {raw_json_path}")
-            return True
+        logger.info("PDF processing completed successfully.")
+        return True
 
     except Exception as e:
-        logger.exception(f"Error processing document: {e}")
+        logger.error(f"Error processing PDF from S3: {e}")
         return False
 
-    finally:
-        if local_file_path and os.path.exists(local_file_path):
-            os.remove(local_file_path)
-            logger.info(f"Deleted temp file: {local_file_path}")
-
 if __name__ == "__main__":
+    # Replace these values with your actual S3 bucket and object details
     bucket_name = "your-s3-bucket-name"
-    object_key_whitepaper = "path/to/your/whitepaper.pdf"
-    output_dir = "extracted_output"
+    object_key = "path/to/your/whitepaper.pdf"
+    
+    # Output path for saving the processed data locally
+    output_json_file = "processed_output.json"
 
-    success_whitepaper = extract_from_s3_pdf(bucket_name, object_key_whitepaper, output_dir)
-    if success_whitepaper:
-        logger.info(f"Whitepaper extraction successful!")
-    else:
-        logger.error("Whitepaper extraction failed.")
+    success = process_pdf_from_s3(bucket_name, object_key, output_json_file)
+

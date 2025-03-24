@@ -5,11 +5,13 @@ import logging
 from typing import List
 import pandas as pd
 from textractprettyprinter.t_pretty_print import convert_table_to_list
+from difflib import SequenceMatcher
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Step 1: Start Textract Async Job ===
+# Start the asynchronous Textract analysis job
 def start_textract_analysis(bucket: str, key: str) -> str:
     textract = boto3.client("textract")
     response = textract.start_document_analysis(
@@ -20,7 +22,7 @@ def start_textract_analysis(bucket: str, key: str) -> str:
     logger.info(f"Started Textract job: {job_id}")
     return job_id
 
-# === Step 2: Wait for Job Completion ===
+# Wait for the job to complete
 def wait_for_completion(job_id: str) -> str:
     textract = boto3.client("textract")
     while True:
@@ -31,7 +33,7 @@ def wait_for_completion(job_id: str) -> str:
             return status
         time.sleep(5)
 
-# === Step 3: Get All Textract Blocks ===
+# Get all result pages of the job
 def get_all_blocks(job_id: str) -> List[dict]:
     textract = boto3.client("textract")
     blocks = []
@@ -51,49 +53,55 @@ def get_all_blocks(job_id: str) -> List[dict]:
 
     return blocks
 
-# === Step 4: Find Tables After a Section Heading ===
-def find_tables_after_section(blocks: List[dict], section_title: str) -> List[List[List[str]]]:
+# Fuzzy matching helper
+def fuzzy_match(a: str, b: str, threshold: float = 0.7) -> bool:
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
+
+# Find tables after a section heading, optionally across multiple pages
+def find_tables_after_section(blocks: List[dict], section_title: str, page_range: int = 2) -> List[List[List[str]]]:
     section_found = False
-    extracted_tables = []
-    current_table = []
+    section_page = None
+    collected_tables = []
 
     for block in blocks:
         if block["BlockType"] == "LINE":
-            text = block.get("Text", "").strip().lower()
-            if section_title.lower() in text:
+            text = block.get("Text", "").strip()
+            if fuzzy_match(text, section_title):
                 section_found = True
+                section_page = block.get("Page")
+                logger.info(f"Found section '{section_title}' on page {section_page}")
 
-        elif block["BlockType"] == "TABLE" and section_found:
-            # Optional: You could filter by page here too
-            current_table.append(block)
+        elif section_found and block["BlockType"] == "TABLE":
+            table_page = block.get("Page")
+            if table_page is not None and section_page is not None and (0 <= table_page - section_page <= page_range):
+                collected_tables.append(block)
 
-    if not current_table:
+    if not collected_tables:
         logger.warning(f"No tables found after section: {section_title}")
         return []
 
-    # Convert using textractprettyprinter (entire document)
+    # Rebuild full tables
     full_tables = convert_table_to_list({"Blocks": blocks})
+    return full_tables[-len(collected_tables):] if len(collected_tables) <= len(full_tables) else full_tables
 
-    # Return all tables after section
-    return full_tables[len(full_tables) - len(current_table):]
-
-# === Step 5: Convert to DataFrames ===
+# Convert list of tables to DataFrames
 def tables_to_dataframes(tables: List[List[List[str]]]) -> List[pd.DataFrame]:
     dfs = []
     for table in tables:
-        if not table or not table[0]: continue  # Skip empty
+        if not table or not table[0]:
+            continue
         df = pd.DataFrame(table[1:], columns=table[0])
         dfs.append(df)
     return dfs
 
-# === Step 6: Save to JSON for review ===
+# Save raw Textract response
 def save_json(data, path):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
     logger.info(f"Saved output to {path}")
 
-# === Main Entry Point ===
-def process_pdf_section_tables(bucket: str, key: str, section_title: str, output_path: str) -> List[pd.DataFrame]:
+# Full process: Textract job + table extraction by section
+def process_pdf_section_tables(bucket: str, key: str, section_title: str, output_path: str, page_range: int = 2) -> List[pd.DataFrame]:
     job_id = start_textract_analysis(bucket, key)
     status = wait_for_completion(job_id)
 
@@ -102,21 +110,19 @@ def process_pdf_section_tables(bucket: str, key: str, section_title: str, output
         return []
 
     blocks = get_all_blocks(job_id)
-
-    # Optional: Save full response
     save_json({"Blocks": blocks}, output_path)
 
-    tables = find_tables_after_section(blocks, section_title)
+    tables = find_tables_after_section(blocks, section_title, page_range)
     dataframes = tables_to_dataframes(tables)
 
     logger.info(f"Found {len(dataframes)} table(s) under section: '{section_title}'")
     return dataframes
 
-# === Example Runner ===
+# === Runner ===
 if __name__ == "__main__":
     bucket_name = "your-s3-bucket-name"
-    object_key = "path/to/your/largefile.pdf"
-    section_to_find = "Input Data"
+    object_key = "your/path/to/largefile.pdf"
+    section_to_find = "Question from the document"  # Replace with your section title
     output_json = "textract_output.json"
 
     dfs = process_pdf_section_tables(bucket_name, object_key, section_to_find, output_json)

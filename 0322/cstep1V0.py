@@ -2,7 +2,6 @@ import boto3
 import json
 import re
 import logging
-import os
 from textractcaller.t_call import call_textract, Textract_Features
 from textractprettyprinter.t_pretty_print import get_text_from_layout_json, convert_table_to_list
 from botocore.exceptions import ClientError
@@ -11,127 +10,102 @@ from botocore.exceptions import ClientError
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-import boto3
-
-def call_textract_with_s3_bytes(bucket: str, key: str) -> dict:
-    s3_client = boto3.client('s3')
-    textract_client = boto3.client('textract')
-
-    # Get PDF bytes
-    s3_object = s3_client.get_object(Bucket=bucket, Key=key)
-    pdf_bytes = s3_object['Body'].read()
-
-    # Call Textract with bytes
-    response = call_textract(
-        input_document=pdf_bytes,
-        features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
-        boto3_textract_client=textract_client,
-    )
-
-    return response
-
-
-
-
-def filter_low_confidence_blocks(blocks: list, threshold: float = 85.0) -> list:
-    """Filters blocks based on confidence score."""
-    return [block for block in blocks if block.get('Confidence', 0) >= threshold]
-
-
-def clean_extracted_text(text: str) -> str:
-    """Cleans extracted text by removing unwanted characters and formatting."""
-    return re.sub(r'\s+', ' ', text).strip()
-
-
-def extract_text_from_textract_response(textract_response: dict) -> str:
-    """Extracts clean text using Textract layout parser."""
+def call_textract_with_bytes(bucket_name: str, object_key: str) -> dict:
+    """
+    Downloads a PDF file from S3 and calls Textract using bytes input.
+    This ensures LAYOUT + TABLES features are honored properly.
+    """
     try:
-        logger.info("Extracting text from Textract response...")
+        s3 = boto3.client('s3')
+        textract = boto3.client('textract')
 
-        if 'Blocks' not in textract_response or not isinstance(textract_response['Blocks'], list):
-            raise ValueError("Invalid Textract response: missing or malformed 'Blocks'.")
+        logger.info(f"Downloading s3://{bucket_name}/{object_key} into memory")
+        response = s3.get_object(Bucket=bucket_name, Key=object_key)
+        file_bytes = response['Body'].read()
 
-        filtered_blocks = filter_low_confidence_blocks(textract_response['Blocks'])
-
-        extracted_text = get_text_from_layout_json(
-            textract_json={"Blocks": filtered_blocks},
-            exclude_page_header=True,
-            exclude_page_footer=True,
-            exclude_page_number=True,
+        logger.info("Calling Textract with LAYOUT and TABLES features")
+        textract_response = call_textract(
+            input_document=file_bytes,
+            features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
+            boto3_textract_client=textract,
         )
 
-        cleaned_text = clean_extracted_text(extracted_text)
-        logger.info("Text extraction successful.")
-        return cleaned_text
+        if not textract_response or 'Blocks' not in textract_response:
+            raise ValueError("Textract returned an empty or invalid response.")
+
+        return textract_response
 
     except Exception as e:
-        logger.exception(f"Error extracting text from Textract response: {e}")
+        logger.exception(f"Textract call failed: {e}")
         raise
 
+def filter_low_confidence_blocks(blocks, threshold=85.0):
+    return [block for block in blocks if block.get('Confidence', 0) >= threshold]
 
-def extract_tables_from_textract_response(textract_response: dict) -> list:
-    """Extracts tables using textractprettyprinter."""
+def clean_extracted_text(text: str) -> str:
+    return re.sub(r'\s+', ' ', text).strip()
+
+def extract_text(textract_response: dict) -> str:
     try:
-        logger.info("Extracting tables from Textract response...")
-
-        table_data = convert_table_to_list(textract_response)
-
-        if not isinstance(table_data, list):
-            logger.warning(f"Unexpected table output format: {type(table_data)}")
-            return []
-
-        logger.info(f"Extracted {len(table_data)} tables.")
-        return table_data
-
+        logger.info("Extracting clean text from Textract response")
+        blocks = textract_response.get("Blocks", [])
+        filtered = filter_low_confidence_blocks(blocks)
+        extracted_text = get_text_from_layout_json(
+            textract_json={"Blocks": filtered},
+            exclude_page_header=True,
+            exclude_page_footer=True,
+            exclude_page_number=True
+        )
+        return clean_extracted_text(extracted_text)
     except Exception as e:
-        logger.exception(f"Error extracting tables: {e}")
-        return []  # Return empty list if table extraction fails
+        logger.exception(f"Text extraction failed: {e}")
+        return ""
 
-
-def save_output_to_file(data: dict, output_file_path: str) -> None:
-    """Saves extracted text and tables to JSON."""
+def extract_tables(textract_response: dict) -> list:
     try:
-        with open(output_file_path, 'w', encoding='utf-8') as outfile:
-            json.dump(data, outfile, indent=4)
-        logger.info(f"Output saved to {output_file_path}")
+        logger.info("Extracting tables from Textract response")
+        tables = convert_table_to_list(textract_response)
+        return tables if isinstance(tables, list) else []
     except Exception as e:
-        logger.exception(f"Failed to save output: {e}")
+        logger.warning(f"Table extraction failed: {e}")
+        return []
+
+def save_output(data: dict, path: str) -> None:
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+        logger.info(f"Saved output to {path}")
+    except Exception as e:
+        logger.exception(f"Saving output failed: {e}")
         raise
 
-
-def process_s3_pdf(bucket_name: str, object_key: str, output_file_path: str) -> bool:
-    """
-    Full pipeline: Call Textract, extract text + tables, and save to file.
-    """
+def process_s3_pdf(bucket_name: str, object_key: str, output_file: str) -> bool:
     try:
-        textract_response = call_textract_with_s3_url(bucket_name, object_key)
+        textract_response = call_textract_with_bytes(bucket_name, object_key)
+        text = extract_text(textract_response)
+        tables = extract_tables(textract_response)
 
-        extracted_text = extract_text_from_textract_response(textract_response)
-        tables = extract_tables_from_textract_response(textract_response)
-
-        save_output_to_file({
-            "text": extracted_text,
+        save_output({
+            "text": text,
             "tables": tables
-        }, output_file_path)
+        }, output_file)
 
-        logger.info("PDF processing completed successfully.")
+        logger.info("PDF processed successfully.")
         return True
 
     except Exception as e:
-        logger.error(f"Failed to process PDF from S3: {e}")
+        logger.error(f"PDF processing failed: {e}")
         return False
 
-
-# --- Entry point ---
 if __name__ == "__main__":
-    # Replace with actual S3 bucket and file
-    bucket_name = os.environ.get("BUCKET_NAME", "your-s3-bucket-name")
-    object_key = os.environ.get("OBJECT_KEY", "path/to/your/whitepaper.pdf")
-    output_file = os.environ.get("OUTPUT_FILE", "processed_output.json")
+    import os
 
-    success = process_s3_pdf(bucket_name, object_key, output_file)
+    bucket = os.environ.get("BUCKET_NAME", "your-s3-bucket")
+    key = os.environ.get("OBJECT_KEY", "path/to/your/document.pdf")
+    output_path = os.environ.get("OUTPUT_PATH", "output.json")
+
+    success = process_s3_pdf(bucket, key, output_path)
     if success:
-        logger.info("✔️ Extraction complete.")
+        logger.info("✅ Extraction completed.")
     else:
         logger.error("❌ Extraction failed.")

@@ -178,4 +178,70 @@ if __name__ == "__main__":
 
 
 
+import json
+from semantic_search import search_index
+import boto3
+
+# Claude Model ID
+CLAUDE_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# === Build Claude Prompt ===
+def build_claude_prompt(question: str, context_chunks: list) -> str:
+    prompt = (
+        "You are a document analysis assistant.\n"
+        "Based on the extracted content below, answer the user’s question.\n\n"
+        "Context:\n"
+    )
+
+    for i, chunk in enumerate(context_chunks):
+        prompt += f"Chunk {i+1}:\n{chunk}\n\n"
+
+    prompt += f"User Question: {question}\n\n"
+    prompt += "Answer clearly and concisely. If the answer is not found, reply 'Not found.'"
+    return prompt
+
+# === Claude Bedrock Call ===
+def query_claude(prompt: str) -> str:
+    bedrock = boto3.client("bedrock-runtime")
+
+    response = bedrock.invoke_model(
+        modelId=CLAUDE_MODEL_ID,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps({
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 1000,
+            "temperature": 0.2
+        })
+    )
+
+    body = json.loads(response['body'].read())
+    return body['content'][0]['text']
+
+# === Main Q&A Function ===
+def ask_question(question: str, top_k: int = 5):
+    print(f"🔍 Searching document for: {question}")
+    chunks = search_index(question, top_k=top_k)
+
+    print("🧠 Sending context to Claude...")
+    prompt = build_claude_prompt(question, chunks)
+    answer = query_claude(prompt)
+
+    print("\n=== Claude's Answer ===")
+    print(answer)
+
+# === Run as CLI ===
+if __name__ == "__main__":
+    print("Claude Document Q&A Assistant")
+    while True:
+        q = input("\nAsk a question (or 'exit'): ")
+        if q.lower() in ["exit", "quit"]:
+            break
+        ask_question(q)
+
+
+
+
 

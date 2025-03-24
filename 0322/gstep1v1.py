@@ -1,3 +1,12 @@
+pip install amazon-textract-caller
+pip install amazon-textract-prettyprinter
+pip install amazon-textract-response-parser
+pip install boto3
+pip install pdfplumber
+pip install amazon-textract-textractor  # Optional, for advanced processing
+
+
+
 import boto3
 import io
 import json

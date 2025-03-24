@@ -96,3 +96,86 @@ if __name__ == "__main__":
     textract_path = "textract_output.json"
     chunks = extract_text_chunks_from_textract(textract_path)
     build_faiss_index(chunks)
+
+
+
+
+
+
+
+
+import json
+import faiss
+import numpy as np
+import boto3
+from typing import List
+
+# Configuration
+EMBED_MODEL_ID = "amazon.titan-embed-text-v1"
+FAISS_INDEX_PATH = "faiss_index/index.faiss"
+CHUNKS_PATH = "faiss_index/chunks.json"
+ID_MAP_PATH = "faiss_index/id_map.json"
+TOP_K = 5
+
+# === Load FAISS index ===
+def load_faiss_index(index_path: str):
+    return faiss.read_index(index_path)
+
+# === Load metadata (chunk IDs and texts) ===
+def load_chunks(chunk_file: str, id_map_file: str):
+    with open(chunk_file, "r", encoding="utf-8") as f:
+        chunk_dict = json.load(f)
+    with open(id_map_file, "r", encoding="utf-8") as f:
+        id_map = json.load(f)
+    return chunk_dict, id_map
+
+# === Embed user query via Bedrock Titan ===
+def embed_query(query: str) -> List[float]:
+    bedrock = boto3.client("bedrock-runtime")
+    body = {"inputText": query}
+    response = bedrock.invoke_model(
+        modelId=EMBED_MODEL_ID,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps(body)
+    )
+    return json.loads(response["body"].read())["embedding"]
+
+# === Search FAISS index ===
+def search_index(query: str,
+                 index_path: str = FAISS_INDEX_PATH,
+                 chunk_file: str = CHUNKS_PATH,
+                 id_map_file: str = ID_MAP_PATH,
+                 top_k: int = TOP_K) -> List[str]:
+
+    index = load_faiss_index(index_path)
+    chunk_dict, id_map = load_chunks(chunk_file, id_map_file)
+    vector = embed_query(query)
+
+    D, I = index.search(np.array([vector]).astype("float32"), top_k)
+
+    results = []
+    for idx in I[0]:
+        if idx < len(id_map):
+            chunk_id = id_map[idx]
+            text = chunk_dict.get(chunk_id, "")
+            results.append(text)
+
+    return results
+
+# === Run from CLI ===
+if __name__ == "__main__":
+    user_query = input("Ask a question about the document: ")
+    top_chunks = search_index(user_query)
+
+    print("\nTop matching document chunks:\n" + "-"*40)
+    for i, chunk in enumerate(top_chunks):
+        print(f"\nChunk {i+1}:\n{chunk}")
+
+
+
+
+
+
+
+

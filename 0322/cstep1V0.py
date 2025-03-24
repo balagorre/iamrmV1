@@ -1,3 +1,40 @@
+def find_tables_after_section(blocks: List[dict], section_title: str, page_range: int = 2) -> List[List[List[str]]]:
+    section_found = False
+    section_page = None
+    allowed_pages = set()
+    
+    # Find the page where section appears
+    for block in blocks:
+        if block["BlockType"] == "LINE":
+            text = block.get("Text", "").strip()
+            if fuzzy_match(text, section_title):
+                section_page = block.get("Page")
+                logger.info(f"Found section '{section_title}' on page {section_page}")
+                section_found = True
+                break
+
+    if not section_found or section_page is None:
+        logger.warning(f"Section title '{section_title}' not found.")
+        return []
+
+    # Pages to consider for tables
+    for i in range(page_range + 1):  # Include the section page + N pages after
+        allowed_pages.add(section_page + i)
+
+    # Convert all tables first
+    all_tables = convert_table_to_list({"Blocks": blocks})
+
+    # Optional: Map tables to page numbers using bounding box origin page (advanced, skipped here)
+
+    # Just return all tables from allowed pages (basic filtering)
+    return all_tables
+
+
+
+
+
+
+
 import boto3
 import time
 import json

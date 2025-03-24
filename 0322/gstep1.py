@@ -1,3 +1,164 @@
+import json
+import logging
+import os
+import boto3
+from typing import List, Dict, Any
+import argparse
+import pandas as pd
+
+# --- Configuration ---
+BEDROCK_REGION = 'us-east-1'  # Or your Bedrock region
+CLAUDE_MODEL_ID = "anthropic.claude-v2"  # Or your preferred Claude model
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+def invoke_claude(prompt: str, max_tokens: int = 2000) -> str:
+    """Invokes Claude with a given prompt and handles retries."""
+    client = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+    try:
+        body = json.dumps({
+            "prompt": f"\n\nHuman: {prompt}\n\nAssistant:",
+            "max_tokens_to_sample": max_tokens,
+            "temperature": 0.1,
+            "top_p": 0.9,
+        })
+        response = client.invoke_model(
+            modelId=CLAUDE_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=body
+        )
+        response_body = json.loads(response.get("body").read())
+        return response_body.get("completion")
+    except Exception as e:
+        logger.exception(f"Error invoking Claude: {e}")
+        return ""
+
+def extract_tables_with_claude(textract_json_path: str, chunk_size: int = 500) -> List[List[List[str]]]:
+    """Extracts tables using Claude, with chunking."""
+    try:
+        with open(textract_json_path, 'r') as f:
+            textract_data = json.load(f)
+
+        if not isinstance(textract_data, dict) or 'Blocks' not in textract_data:
+            logger.error(f"Invalid Textract JSON format: {textract_json_path}")
+            return []
+
+        blocks = textract_data['Blocks']
+        all_tables = []
+
+        for i in range(0, len(blocks), chunk_size):
+            chunk = blocks[i:i + chunk_size]
+
+            prompt = f"""You are an expert in extracting data from JSON responses of the AWS Textract service.
+Here is a portion of a Textract JSON response. Extract all tables from this JSON.
+
+{json.dumps(chunk, indent=2)}
+
+The JSON contains a list of "Blocks".  Here's how to interpret them:
+
+*   `"BlockType": "TABLE"`:  Indicates the start of a table.
+*   `"BlockType": "CELL"`: Represents a cell within a table.
+*   `"BlockType": "WORD"`: Represents a word.
+*    `"BlockType": "PAGE"`: Represents a page.
+
+Return the extracted tables as a JSON list of tables. Each table should be a list of rows, and each row should be a list of cell values (strings).
+Do *not* include any explanations or extra text, *only* the JSON list.
+
+Example Output (for a single table with 2 rows and 2 columns):
+```json
+[
+  [
+    ["Header 1", "Header 2"],
+    ["Value 1", "Value 2"]
+  ]
+]
+If No Tables, return an empty array '[]'.
+JSON:
+"""
+logger.info(f"Sending prompt to Claude (chunk {i // chunk_size + 1})")
+claude_response = invoke_claude(prompt, max_tokens=4096)
+if not claude_response:
+            logger.error(f"Claude returned an empty response for chunk {i // chunk_size + 1}.")
+            continue
+
+        try:
+            chunk_tables = json.loads(claude_response)
+            if isinstance(chunk_tables, list):
+                all_tables.extend(chunk_tables)
+            else:
+                logger.error(f"Claude returned an unexpected type for chunk {i // chunk_size + 1}: {type(chunk_tables)}")
+        except json.JSONDecodeError:
+            logger.error(f"Claude response is not valid JSON for chunk {i // chunk_size + 1}: {claude_response}")
+
+    return all_tables
+
+except FileNotFoundError:
+    logger.error(f"File not found: {textract_json_path}")
+    return []
+except Exception as e:
+    logger.exception(f"Error extracting tables with Claude: {e}")
+    return []
+def save_tables_to_files(tables: List[List[List[str]]], output_dir: str, base_filename: str):
+"""Saves extracted tables to CSV and JSON files."""
+try:
+os.makedirs(output_dir, exist_ok=True)
+for i, table in enumerate(tables):
+try:
+df = pd.DataFrame(table[1:], columns=table[0]) if len(table) > 1 else pd.DataFrame(table)
+csv_path = os.path.join(output_dir, f"{base_filename}table{i + 1}.csv")
+json_path = os.path.join(output_dir, f"{base_filename}table{i + 1}.json")
+df.to_csv(csv_path, index=False)
+df.to_json(json_path, orient="records", indent=4)
+logger.info(f"Saved table {i + 1} to {csv_path} and {json_path}")
+except Exception as e:
+logger.exception(f"Error saving table {i+1}: {e}")
+except Exception as e:
+logger.exception(f"Error creating output directory or saving files: {e}")
+
+if name == "main":
+parser = argparse.ArgumentParser(description="Extract tables from Textract JSON using Claude.")
+parser.add_argument("json_file", help="Path to the Textract JSON file.")
+parser.add_argument("-o", "--output_dir", default="extracted_tables", help="Output directory for tables.")
+parser.add_argument("-c", "--chunk_size", type=int, default=500, help="Chunk size for processing Textract blocks.")
+args = parser.parse_args()
+
+base_filename = os.path.splitext(os.path.basename(args.json_file))[0]
+base_filename = base_filename.replace("_textract", "")
+
+tables = extract_tables_with_claude(args.json_file, chunk_size=args.chunk_size)
+if tables:
+    save_tables_to_files(tables, args.output_dir, base_filename)
+    print(f"Extracted tables saved to: {args.output_dir}")
+else:
+    print("No tables extracted.")
+
+for i, table in enumerate(tables):
+    print(f"Extracted Table {i + 1}:")
+    if isinstance(table, list):
+        for row in table:
+            print(row)
+    else:
+        print(f"Unexpected table format: {type(table)}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import boto3
 import os
 import json

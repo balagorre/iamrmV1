@@ -36,13 +36,15 @@ def should_merge_tables(table1: List[List[str]], table2: List[List[str]]) -> boo
     if not table1 or not table2:
         return False
 
+    # Check if the number of columns is the same
     if len(table1[0]) != len(table2[0]):
         return False
 
+    # Check similarity of the last row of table1 and the first row of table2
     last_row_table1 = " ".join(table1[-1]).lower()
     first_row_table2 = " ".join(table2[0]).lower()
 
-    if similar(last_row_table1, first_row_table2) > 0.6:
+    if similar(last_row_table1, first_row_table2) > 0.6:  # Adjust threshold as needed
         return True
 
     return False
@@ -56,15 +58,15 @@ def merge_tables(tables: List[List[List[str]]]) -> List[List[List[str]]]:
     current_table = tables[0]
     for next_table in tables[1:]:
         if should_merge_tables(current_table, next_table):
-            current_table.extend(next_table[1:])
+            # Merge:  Remove the header row from next_table (usually) and append
+            current_table.extend(next_table[1:])  # Skip header row of next_table
         else:
             merged_tables.append(current_table)
             current_table = next_table
-    merged_tables.append(current_table)
+    merged_tables.append(current_table)  # Add the last table
     return merged_tables
-
 def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:
-    """Extracts text and tables, excluding headers/footers/page numbers, and merges tables."""
+    """Extracts text/tables, excludes headers/footers/page numbers, merges tables, and includes debugging."""
     try:
         logger.info(f"Extracting text from: {local_file_path}")
 
@@ -87,13 +89,22 @@ def extract_text_and_tables_from_pdf(local_file_path: str) -> dict:
 
         tables = []
         try:
-            table_list = convert_table_to_list(response)
+            # Debugging prints for table extraction
+            print("--- Attempting to extract tables ---")
+            table_list = convert_table_to_list(response)  # Get tables as list of lists
+            print(f"Initial table_list: {table_list}") # added the print
             if table_list:
                 tables = table_list
+                print(f"Extracted {len(tables)} tables initially.")
+            else:
+                print("No tables extracted by convert_table_to_list.")
         except Exception as e:
             logger.warning(f"Error extracting tables: {e}")
+            print("--- Table extraction failed ---")
+
 
         merged_tables = merge_tables(tables)
+        print(f"Merged tables: {merged_tables}")  # Debug print
         return {'text': text, 'tables': merged_tables, 'response': response}
 
     except ClientError as e:
@@ -121,7 +132,7 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
         os.makedirs(output_dir, exist_ok=True)
         base_filename = os.path.splitext(os.path.basename(object_key))[0]
         output_file_path = os.path.join(output_dir, f"{base_filename}_processed.json")
-        raw_json_path = os.path.join(output_dir, f"{base_filename}_textract.json") # Define raw_json_path
+        raw_json_path = os.path.join(output_dir, f"{base_filename}_textract.json")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
             local_file_path = temp_file.name
@@ -137,7 +148,7 @@ def extract_from_s3_pdf(bucket_name: str, object_key: str, output_dir: str) -> b
 
             save_processed_output({'text': extracted_data['text'], 'tables': extracted_data['tables']}, output_file_path)
 
-            with open(raw_json_path, 'w') as f: # Use raw_json_path here
+            with open(raw_json_path, 'w') as f:
                 json.dump(extracted_data['response'], f, indent=4)
             logger.info(f"Saved raw Textract JSON to: {raw_json_path}")
             return True

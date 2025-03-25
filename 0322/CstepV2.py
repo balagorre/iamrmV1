@@ -58,18 +58,22 @@ def is_toc_page(lines):
     return sum(1 for line in lines if any(ind in line.lower() for ind in indicators)) >= 2
 
 def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
+    logging.info("Starting Textract call for document: %s", document_key)
     textract_json = call_textract(
         input_document=f"s3://{bucket}/{document_key}",
         features=[Textract_Features.LAYOUT, Textract_Features.TABLES],
         boto3_textract_client=boto3.client('textract')
     )
 
+        logging.info("Textract analysis complete. Parsing structured TRP document...")
     t_document = TDocumentSchema().load(textract_json)
     structured_pages = []
     last_known_section = 'unclassified'
     last_table = None
 
+        logging.info("Beginning page-by-page parsing...")
     for page_index, page in enumerate(t_document.pages):
+        logging.info("Processing page %d of %d", page_index + 1, len(t_document.pages))
         lines = [line.text.strip() for line in page.lines]
         is_toc = is_toc_page(lines)
 
@@ -131,6 +135,7 @@ def classify_table_by_header(headers):
     return "general"
 
 def classify_tables_in_output(structured_output):
+    logging.info("Classifying tables by header keywords...")
     for page in structured_output.get("structured_pages", []):
         for table in page.get("tables", []):
             if table['data']:
@@ -139,6 +144,7 @@ def classify_tables_in_output(structured_output):
     return structured_output
 
 def export_output(output_data, output_bucket, output_prefix, local_filename):
+    logging.info("Exporting structured output to S3 and local file...")
     s3_key = f"{output_prefix}/structured_output.json"
     s3_client.put_object(
         Bucket=output_bucket,
@@ -150,6 +156,7 @@ def export_output(output_data, output_bucket, output_prefix, local_filename):
     logging.info(f"Output exported to S3 (s3://{output_bucket}/{s3_key}) and local file ({local_filename})")
 
 def run_full_extraction_pipeline(input_bucket, input_pdf_key, output_bucket, output_prefix, local_output_path):
+    logging.info("Starting full extraction pipeline for: %s", input_pdf_key)
     structured_output = extract_text_tables(bucket=input_bucket, document_key=input_pdf_key)
     structured_output = classify_tables_in_output(structured_output)
     full_output = {

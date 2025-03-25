@@ -3,14 +3,13 @@ import json
 import logging
 from datetime import datetime
 from textractcaller.t_call import call_textract, Textract_Features
-from textractprettyprinter.t_pretty_print import get_text_from_layout_json
 from trp.trp2 import TDocumentSchema
+from tqdm import tqdm
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
 
 s3_client = boto3.client('s3')
-rekognition_client = boto3.client('rekognition')
 
 SECTION_PATTERNS = {
     'upstreams': ['upstream systems', 'data ingestion', 'data source architecture'],
@@ -65,15 +64,14 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
         boto3_textract_client=boto3.client('textract')
     )
 
-        logging.info("Textract analysis complete. Parsing structured TRP document...")
+    logging.info("Textract analysis complete. Parsing structured TRP document...")
     t_document = TDocumentSchema().load(textract_json)
     structured_pages = []
     last_known_section = 'unclassified'
     last_table = None
 
-        logging.info("Beginning page-by-page parsing...")
-    for page_index, page in enumerate(t_document.pages):
-        logging.info("Processing page %d of %d", page_index + 1, len(t_document.pages))
+    logging.info("Beginning page-by-page parsing...")
+    for page_index, page in tqdm(enumerate(t_document.pages), total=len(t_document.pages), desc="Processing Pages"):
         lines = [line.text.strip() for line in page.lines]
         is_toc = is_toc_page(lines)
 

@@ -72,7 +72,7 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
 
     logging.info("Beginning page-by-page parsing...")
     for page_index, page in tqdm(enumerate(t_document.pages), total=len(t_document.pages), desc="Processing Pages"):
-        lines = [line.text.strip() for line in page.lines]
+        lines = [block.text.strip() for block in page.blocks if block.block_type == 'LINE']
         is_toc = is_toc_page(lines)
 
         page_content = {
@@ -84,7 +84,10 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
         }
 
         if not is_toc:
-            for line in page.lines:
+            for block in page.blocks:
+            if block.block_type == 'LINE':
+                line = block
+                text = line.text.strip()
                 text = line.text.strip()
                 if line.geometry.bounding_box.height > heading_height_threshold:
                     page_content['headings'].append(text)

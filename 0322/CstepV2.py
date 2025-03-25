@@ -72,7 +72,7 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
 
     logging.info("Beginning page-by-page parsing...")
     for page_index, page in tqdm(enumerate(t_document.pages), total=len(t_document.pages), desc="Processing Pages"):
-        lines = [line.text.strip() for line in page.get_lines()]
+        lines = [line.text.strip() for line in page.lines]
         is_toc = is_toc_page(lines)
 
         page_content = {
@@ -154,6 +154,37 @@ def export_output(output_data, output_bucket, output_prefix, local_filename):
     logging.info(f"Output exported to S3 (s3://{output_bucket}/{s3_key}) and local file ({local_filename})")
 
 def run_full_extraction_pipeline(input_bucket, input_pdf_key, output_bucket, output_prefix, local_output_path):
+    logging.info("Starting full extraction pipeline for: %s", input_pdf_key)
+    
+    try:
+        structured_output = extract_text_tables(bucket=input_bucket, document_key=input_pdf_key)
+    except Exception as e:
+        logging.error("Failed during Textract extraction: %s", str(e))
+        return
+
+    try:
+        structured_output = classify_tables_in_output(structured_output)
+    except Exception as e:
+        logging.error("Failed during table classification: %s", str(e))
+        return
+
+    full_output = {
+        "model_metadata": structured_output["model_metadata"],
+        "structured_pages": structured_output["structured_pages"]
+    }
+
+    try:
+        export_output(
+            output_data=full_output,
+            output_bucket=output_bucket,
+            output_prefix=output_prefix,
+            local_filename=local_output_path
+        )
+    except Exception as e:
+        logging.error("Failed during export: %s", str(e))
+        return
+
+    logging.info("✅ Full pipeline completed successfully.")
     logging.info("Starting full extraction pipeline for: %s", input_pdf_key)
     structured_output = extract_text_tables(bucket=input_bucket, document_key=input_pdf_key)
     structured_output = classify_tables_in_output(structured_output)

@@ -52,8 +52,6 @@ def classify_section(heading):
             return section_type
     return 'unclassified'
 
-def is_toc_page(lines):
-    indicators = ['table of contents', 'contents', '.....']
     return sum(1 for line in lines if any(ind in line.lower() for ind in indicators)) >= 2
 
 def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
@@ -73,22 +71,18 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
     logging.info("Beginning page-by-page parsing...")
     for page_index, page in tqdm(enumerate(t_document.pages), total=len(t_document.pages), desc="Processing Pages"):
         lines = [block.text.strip() for block in page.blocks if block.block_type == 'LINE']
-        is_toc = is_toc_page(lines)
-
         page_content = {
             'page_number': page_index + 1,
             'headings': [],
             'paragraphs': [],
             'tables': [],
-            'section_type': 'toc' if is_toc else last_known_section
+            'section_type': last_known_section
         }
 
-        if not is_toc:
-            for block in page.__dict__.get("blocks", []):
-            if hasattr(block, "block_type") and block.block_type == 'LINE':
+                    for block in page.blocks:
+            if block.block_type == 'LINE':
                 text = block.text.strip()
-                text = line.text.strip()
-                if line.geometry.bounding_box.height > heading_height_threshold:
+                if block.geometry.bounding_box.height > heading_height_threshold:
                     page_content['headings'].append(text)
                     section_guess = classify_section(text)
                     if section_guess != 'unclassified':

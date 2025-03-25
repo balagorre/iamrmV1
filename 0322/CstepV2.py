@@ -84,10 +84,9 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
         }
 
         if not is_toc:
-            for block in page.blocks:
-            if block.block_type == 'LINE':
-                line = block
-                text = line.text.strip()
+            for block in page.__dict__.get("blocks", []):
+            if hasattr(block, "block_type") and block.block_type == 'LINE':
+                text = block.text.strip()
                 text = line.text.strip()
                 if line.geometry.bounding_box.height > heading_height_threshold:
                     page_content['headings'].append(text)

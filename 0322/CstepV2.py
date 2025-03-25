@@ -72,7 +72,7 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
 
     logging.info("Beginning page-by-page parsing...")
     for page_index, page in tqdm(enumerate(t_document.pages), total=len(t_document.pages), desc="Processing Pages"):
-        lines = [b.text.strip() for b in page.blocks if b.block_type == 'LINE']
+        lines = [line.text.strip() for line in page.lines]
         is_toc = is_toc_page(lines)
 
         page_content = {
@@ -84,7 +84,7 @@ def extract_text_tables(bucket, document_key, heading_height_threshold=0.03):
         }
 
         if not is_toc:
-            for line in [b for b in page.blocks if b.block_type == 'LINE']:
+            for line in page.lines:
                 text = line.text.strip()
                 if line.geometry.bounding_box.height > heading_height_threshold:
                     page_content['headings'].append(text)
@@ -184,21 +184,6 @@ def run_full_extraction_pipeline(input_bucket, input_pdf_key, output_bucket, out
         logging.error("Failed during export: %s", str(e))
         return
 
-    logging.info("✅ Full pipeline completed successfully.")
-    logging.info("Starting full extraction pipeline for: %s", input_pdf_key)
-    structured_output = extract_text_tables(bucket=input_bucket, document_key=input_pdf_key)
-    structured_output = classify_tables_in_output(structured_output)
-    full_output = {
-        "model_metadata": structured_output["model_metadata"],
-        "structured_pages": structured_output["structured_pages"]
-    }
-    export_output(
-        output_data=full_output,
-        output_bucket=output_bucket,
-        output_prefix=output_prefix,
-        local_filename=local_output_path
-    )
-    logging.info("✅ Full pipeline completed successfully.")
 
 if __name__ == "__main__":
     input_bucket = "your-input-s3-bucket"
